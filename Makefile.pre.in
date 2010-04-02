@@ -248,6 +248,7 @@ ASDLGEN=	$(srcdir)/Parser/asdl_c.py
 
 ##########################################################################
 # Python
+#   pgbovine - added memoize*.o
 PYTHON_OBJS=	\
 		Python/_warnings.o \
 		Python/Python-ast.o \
@@ -255,6 +256,12 @@ PYTHON_OBJS=	\
 		Python/ast.o \
 		Python/bltinmodule.o \
 		Python/ceval.o \
+		Python/memoize.o \
+		Python/memoize_fmi.o \
+		Python/memoize_COW.o \
+		Python/memoize_codedep.o \
+		Python/memoize_pickle.o \
+		Python/memoize_reachability.o \
 		Python/compile.o \
 		Python/codecs.o \
 		Python/errors.o \
@@ -579,6 +586,7 @@ Python/formatter_string.o: $(srcdir)/Python/formatter_string.c \
 
 ############################################################################
 # Header files
+#   pgbovine - added memoize*.h
 
 PYTHON_HEADERS= \
 		Include/Python-ast.h \
@@ -594,6 +602,14 @@ PYTHON_HEADERS= \
 		Include/bufferobject.h \
 		Include/cellobject.h \
 		Include/ceval.h \
+		Include/memoize.h \
+		Include/memoize_fmi.h \
+		Include/memoize_COW.h \
+		Include/memoize_logging.h \
+		Include/memoize_profiling.h \
+		Include/memoize_codedep.h \
+		Include/memoize_pickle.h \
+		Include/memoize_reachability.h \
 		Include/classobject.h \
 		Include/cobject.h \
 		Include/code.h \
