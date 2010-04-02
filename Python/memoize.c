@@ -220,7 +220,7 @@ int pg_ignore_code(PyCodeObject* co) {
   //
   // We must customize this path later for portability ...
   // maybe in a configure or Makefile somewhere
-  if (!strncmp("/Users/pgbovine/Desktop/incpy/Lib/", 
+  if (!strncmp("/Users/pgbovine/IncPy/Lib/", 
                PyString_AsString(co->co_filename), 34)) {
     return 1;
   }
@@ -1773,7 +1773,7 @@ void pg_about_to_MUTATE_event(PyObject *object) {
     assert(global_container && PyTuple_CheckExact(global_container));
     PyObject* filename = PyTuple_GET_ITEM(global_container, 0);
 
-    if (!strncmp("/Users/pgbovine/Desktop/incpy/Lib/", 
+    if (!strncmp("/Users/pgbovine/IncPy/Lib/", 
                  PyString_AsString(filename), 34)) {
       MEMOIZE_PUBLIC_END() // don't forget this!!!
       return;
