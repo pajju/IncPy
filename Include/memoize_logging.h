@@ -20,18 +20,10 @@ extern "C" {
 // according to some cursory measurements)
 #define ENABLE_LOGGING
 
-// log to stdout rather than to log_file
-//#define STDOUT_LOGGING
-
 
 #ifdef ENABLE_LOGGING
-  #ifdef STDOUT_LOGGING
-    #define PG_LOG(str) fprintf(stdout, "%s\n", str);
-    #define PG_LOG_PRINTF(...) fprintf (stdout, __VA_ARGS__)
-  #else
-    #define PG_LOG(str) fprintf(log_file, "%s\n", str);
-    #define PG_LOG_PRINTF(...) fprintf (log_file, __VA_ARGS__)
-  #endif
+  #define PG_LOG(str) fprintf(log_file, "%s\n", str);
+  #define PG_LOG_PRINTF(...) fprintf (log_file, __VA_ARGS__)
 
 // initialize in pg_initialize(), destroy in pg_finalize()
 FILE* log_file;

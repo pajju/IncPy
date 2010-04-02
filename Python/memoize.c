@@ -216,7 +216,14 @@ int pg_ignore_code(PyCodeObject* co) {
     return 1;
   }
 
-  // 3. ignore code from the standard library:
+  // 3. ignore code with untrackable filenames
+  if ((strcmp(PyString_AsString(co->co_filename), "<string>") == 0) ||
+      (strcmp(PyString_AsString(co->co_filename), "<stdin>") == 0) || 
+      (strcmp(PyString_AsString(co->co_filename), "???") == 0)) {
+    return 1;
+  }
+
+  // 4. ignore code from the standard library:
   //
   // We must customize this path later for portability ...
   // maybe in a configure or Makefile somewhere
