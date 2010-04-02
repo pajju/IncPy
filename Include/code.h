@@ -6,6 +6,8 @@
 extern "C" {
 #endif
 
+#include "memoize_fmi.h" // pgbovine
+
 /* Bytecode object */
 typedef struct {
     PyObject_HEAD
@@ -22,6 +24,14 @@ typedef struct {
     /* The rest doesn't count for hash/cmp */
     PyObject *co_filename;	/* string (where it was loaded from) */
     PyObject *co_name;		/* string (name, for reference) */
+    PyObject *co_classname; /* pgbovine - string (CLASS NAME if code is 
+                               part of a method).  NOT INITIALIZED AT CREATION-TIME!
+                               must be manually initialized later!!! */
+    PyObject *pg_canonical_name; /* pgbovine - string that contains a combo of 
+                                               co_filename, co_name, and possibly co_classname */
+    FuncMemoInfo* pg_func_memo_info; /* pgbovine - FuncMemoInfo associated with this code */
+    char pg_ignore; /* pgbovine - non-zero if this code should be ignored - see Python/memoize.c */
+    char pg_is_module; /* pgbovine - non-zero if this code's name is '<module>' */
     int co_firstlineno;		/* first source line number */
     PyObject *co_lnotab;	/* string (encoding addr<->lineno mapping) */
     void *co_zombieframe;     /* for optimization only (see frameobject.c) */

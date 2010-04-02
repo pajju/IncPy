@@ -2,6 +2,8 @@
 #include "code.h"
 #include "structmember.h"
 
+#include "memoize.h" /* pgbovine */
+
 #define NAME_CHARS \
 	"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
 
@@ -103,7 +105,15 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 		Py_INCREF(lnotab);
 		co->co_lnotab = lnotab;
                 co->co_zombieframe = NULL;
+
+    // pgbovine - NULL this out
+    co->co_classname = NULL;
+    co->pg_canonical_name = pg_create_canonical_code_name(co); // pgbovine
+    co->pg_func_memo_info = NULL; // pgbovine
+    co->pg_ignore = pg_ignore_code(co); // pgbovine
+    co->pg_is_module = (strcmp(PyString_AsString(co->co_name), "<module>") == 0); // pgbovine
 	}
+
 	return co;
 }
 
@@ -265,6 +275,8 @@ code_dealloc(PyCodeObject *co)
 	Py_XDECREF(co->co_cellvars);
 	Py_XDECREF(co->co_filename);
 	Py_XDECREF(co->co_name);
+	Py_XDECREF(co->co_classname); // pgbovine
+	Py_XDECREF(co->pg_canonical_name); // pgbovine
 	Py_XDECREF(co->co_lnotab);
         if (co->co_zombieframe != NULL)
                 PyObject_GC_Del(co->co_zombieframe);

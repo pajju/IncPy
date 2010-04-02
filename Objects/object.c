@@ -4,6 +4,9 @@
 #include "Python.h"
 #include "frameobject.h"
 
+/* pgbovine */
+#include "memoize.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -1168,6 +1171,8 @@ PyObject_SetAttrString(PyObject *v, const char *name, PyObject *w)
 	return res;
 }
 
+/* pgbovine - this seems to be a great point for intercepting the
+   retrieval of object attributes */
 PyObject *
 PyObject_GetAttr(PyObject *v, PyObject *name)
 {
@@ -1192,10 +1197,20 @@ PyObject_GetAttr(PyObject *v, PyObject *name)
 			return NULL;
 		}
 	}
-	if (tp->tp_getattro != NULL)
-		return (*tp->tp_getattro)(v, name);
-	if (tp->tp_getattr != NULL)
-		return (*tp->tp_getattr)(v, PyString_AS_STRING(name));
+
+  /* pgbovine - success cases */
+	if (tp->tp_getattro != NULL) {
+		PyObject *res = (*tp->tp_getattro)(v, name);
+    pg_GetAttr_event(v, name, res);
+    return res;
+  }
+	if (tp->tp_getattr != NULL) {
+		PyObject *res = (*tp->tp_getattr)(v, PyString_AS_STRING(name));
+    pg_GetAttr_event(v, name, res);
+		return res;
+  }
+
+  /* pgbovine - failure case */
 	PyErr_Format(PyExc_AttributeError,
 		     "'%.50s' object has no attribute '%.400s'",
 		     tp->tp_name, PyString_AS_STRING(name));
@@ -1214,6 +1229,8 @@ PyObject_HasAttr(PyObject *v, PyObject *name)
 	return 0;
 }
 
+/* pgbovine - this seems to be a great point for intercepting the
+   mutation of object attributes */
 int
 PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 {
@@ -1243,17 +1260,25 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 		Py_INCREF(name);
 
 	PyString_InternInPlace(&name);
+
+  /* pgbovine - success cases */
 	if (tp->tp_setattro != NULL) {
+    pg_about_to_MUTATE_event(v); // pgbovine
+
 		err = (*tp->tp_setattro)(v, name, value);
 		Py_DECREF(name);
 		return err;
 	}
 	if (tp->tp_setattr != NULL) {
+    pg_about_to_MUTATE_event(v); // pgbovine
+
 		err = (*tp->tp_setattr)(v, PyString_AS_STRING(name), value);
 		Py_DECREF(name);
 		return err;
 	}
 	Py_DECREF(name);
+
+  /* pgbovine - failure case */
 	if (tp->tp_getattr == NULL && tp->tp_getattro == NULL)
 		PyErr_Format(PyExc_TypeError,
 			     "'%.100s' object has no attributes "
@@ -2156,6 +2181,10 @@ _Py_ReadyTypes(void)
 
 #ifdef Py_TRACE_REFS
 
+
+/* pgbovine - initialize the extra fields I added
+   (remember the other version for !Py_TRACE_REFS in Include/object.h) */
+extern unsigned long long int num_executed_instrs; // defined in Python/ceval.c
 void
 _Py_NewReference(PyObject *op)
 {
@@ -2163,6 +2192,8 @@ _Py_NewReference(PyObject *op)
 	op->ob_refcnt = 1;
 	_Py_AddToAllObjects(op, 1);
 	_Py_INC_TPALLOCS(op);
+  op->ob_creation_time = num_executed_instrs; // pgbovine
+  op->ob_global_container = NULL; // pgbovine
 }
 
 void

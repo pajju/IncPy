@@ -5,6 +5,7 @@
 #include "code.h" /* For CO_FUTURE_DIVISION */
 #include "import.h"
 
+
 #ifdef __VMS
 #include <unixlib.h>
 #endif
@@ -543,6 +544,17 @@ Py_Main(int argc, char **argv)
 		else
 			Py_DECREF(v);
 	}
+
+
+  /* pgbovine - I'm unsure of where to stick the initialize code,
+     because I don't want to put it too early or else importing of 
+     non-builtin modules doesn't seem to work, but I don't want it
+     too late either ... here seems to work for now, though ...
+     (pg_finalize call is in Py_Finalize)
+
+     on second thought, let's put this INSIDE Py_Initialize() in
+     Python/pythonrun.c, but leave this comment here for reference */
+  // pg_initialize();
 
 	if (command) {
 		sts = PyRun_SimpleStringFlags(command, &cf) != 0;

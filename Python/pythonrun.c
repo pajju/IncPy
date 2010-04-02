@@ -18,6 +18,8 @@
 #include "eval.h"
 #include "marshal.h"
 
+#include "memoize.h" // pgbovine
+
 #ifdef HAVE_SIGNAL_H
 #include <signal.h>
 #endif
@@ -357,6 +359,9 @@ void
 Py_Initialize(void)
 {
 	Py_InitializeEx(1);
+
+  // pgbovine - do this AFTER we're done initializing the interpreter
+  pg_initialize();
 }
 
 
@@ -398,6 +403,13 @@ Py_Finalize(void)
 	 */
 	call_sys_exitfunc();
 	initialized = 0;
+
+
+  /* pgbovine - I'm unsure of where to stick my own exit code, but 
+     here seems good because it will pick up on sys.exit() and also
+     allow call_sys_exitfunc to run beforehand */
+  pg_finalize();
+
 
 	/* Get current thread state and interpreter pointer */
 	tstate = PyThreadState_GET();

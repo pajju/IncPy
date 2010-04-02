@@ -771,6 +771,9 @@ listinsert(PyListObject *self, PyObject *args)
 	PyObject *v;
 	if (!PyArg_ParseTuple(args, "nO:insert", &i, &v))
 		return NULL;
+
+  pg_about_to_MUTATE_event(self); // pgbovine
+
 	if (ins1(self, i, v) == 0)
 		Py_RETURN_NONE;
 	return NULL;
@@ -779,6 +782,8 @@ listinsert(PyListObject *self, PyObject *args)
 static PyObject *
 listappend(PyListObject *self, PyObject *v)
 {
+  pg_about_to_MUTATE_event(self); // pgbovine
+
 	if (app1(self, v) == 0)
 		Py_RETURN_NONE;
 	return NULL;
@@ -793,6 +798,8 @@ listextend(PyListObject *self, PyObject *b)
 	Py_ssize_t mn;		   /* m + n */
 	Py_ssize_t i;
 	PyObject *(*iternext)(PyObject *);
+
+  pg_about_to_MUTATE_event(self); // pgbovine
 
 	/* Special cases:
 	   1) lists and tuples which can use PySequence_Fast ops
@@ -921,6 +928,8 @@ listpop(PyListObject *self, PyObject *args)
 
 	if (!PyArg_ParseTuple(args, "|n:pop", &i))
 		return NULL;
+
+  pg_about_to_MUTATE_event(self); // pgbovine
 
 	if (Py_SIZE(self) == 0) {
 		/* Special-case most common failure cause */
@@ -2046,6 +2055,8 @@ listsort(PyListObject *self, PyObject *args, PyObject *kwds)
 	PyObject *key, *value, *kvpair;
 	static char *kwlist[] = {"cmp", "key", "reverse", 0};
 
+  pg_about_to_MUTATE_event(self); // pgbovine
+
 	assert(self != NULL);
 	assert (PyList_Check(self));
 	if (args != NULL) {
@@ -2217,8 +2228,10 @@ PyList_Sort(PyObject *v)
 static PyObject *
 listreverse(PyListObject *self)
 {
-	if (Py_SIZE(self) > 1)
+	if (Py_SIZE(self) > 1) {
+    pg_about_to_MUTATE_event(self); // pgbovine
 		reverse_slice(self->ob_item, self->ob_item + Py_SIZE(self));
+  }
 	Py_RETURN_NONE;
 }
 
@@ -2312,6 +2325,8 @@ static PyObject *
 listremove(PyListObject *self, PyObject *v)
 {
 	Py_ssize_t i;
+
+  pg_about_to_MUTATE_event(self); // pgbovine
 
 	for (i = 0; i < Py_SIZE(self); i++) {
 		int cmp = PyObject_RichCompareBool(self->ob_item[i], v, Py_EQ);

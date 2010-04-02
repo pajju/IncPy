@@ -718,6 +718,8 @@ set_pop(PySetObject *so)
 	register setentry *entry;
 	PyObject *key;
 
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	assert (PyAnySet_Check(so));
 	if (so->used == 0) {
 		PyErr_SetString(PyExc_KeyError, "pop from an empty set");
@@ -980,6 +982,8 @@ set_update(PySetObject *so, PyObject *args)
 {
 	Py_ssize_t i;
 
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	for (i=0 ; i<PyTuple_GET_SIZE(args) ; i++) {
 		PyObject *other = PyTuple_GET_ITEM(args, i);
 		if (set_update_internal(so, other) == -1)
@@ -1163,6 +1167,8 @@ PyDoc_STRVAR(copy_doc, "Return a shallow copy of a set.");
 static PyObject *
 set_clear(PySetObject *so)
 {
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	set_clear_internal(so);
 	Py_RETURN_NONE;
 }
@@ -1361,6 +1367,8 @@ set_intersection_update_multi(PySetObject *so, PyObject *args)
 {
 	PyObject *tmp;
 
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	tmp = set_intersection_multi(so, args);
 	if (tmp == NULL)
 		return NULL;
@@ -1508,6 +1516,8 @@ set_difference_update(PySetObject *so, PyObject *args)
 {
 	Py_ssize_t i;
 
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	for (i=0 ; i<PyTuple_GET_SIZE(args) ; i++) {
 		PyObject *other = PyTuple_GET_ITEM(args, i);
 		if (set_difference_update_internal(so, other) == -1)
@@ -1629,6 +1639,8 @@ set_symmetric_difference_update(PySetObject *so, PyObject *other)
 	PyObject *key;
 	Py_ssize_t pos = 0;
 	setentry *entry;
+
+  pg_about_to_MUTATE_event(so); // pgbovine
 
 	if ((PyObject *)so == other)
 		return set_clear(so);
@@ -1834,6 +1846,8 @@ set_nocmp(PyObject *self, PyObject *other)
 static PyObject *
 set_add(PySetObject *so, PyObject *key)
 {
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	if (set_add_key(so, key) == -1)
 		return NULL;
 	Py_RETURN_NONE;
@@ -1885,6 +1899,8 @@ set_remove(PySetObject *so, PyObject *key)
 	PyObject *tmpkey;
 	int rv;
 
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	rv = set_discard_key(so, key);
 	if (rv == -1) {
 		if (!PySet_Check(key) || !PyErr_ExceptionMatches(PyExc_TypeError))
@@ -1918,6 +1934,8 @@ set_discard(PySetObject *so, PyObject *key)
 {
 	PyObject *tmpkey, *result;
 	int rv;
+
+  pg_about_to_MUTATE_event(so); // pgbovine
 
 	rv = set_discard_key(so, key);
 	if (rv == -1) {

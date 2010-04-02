@@ -61,18 +61,61 @@ whose size is determined when the object is allocated.
 #define Py_REF_DEBUG
 #endif
 
+/* pgbovine - add the following fields to every PyObject base struct:
+
+   ob_creation_time - tracks creation time of each object; for static
+   initialization, set to 0, which means 'the beginning of execution' 
+
+   ob_global_container - if this value is MUTABLE and reachable from a
+   global variable, then this field refers to the name of that global.
+   if non-null, ob_global_container points to a tuple of strings:
+
+     the first element is ALWAYS a filename indicating the file that
+     this global variable was defined in
+
+     the rest of the elements should be attributes of the f_globals dict
+     of the module indicated by the filename given in the first element
+
+     e.g., ('foo.py', 'global_lst') is a variable named global_lst 
+           defined in foo.py
+     and   ('foo.py', 'second_module', 'global_lst') is a variable named
+           second_module.global_lst defined in foo.py (most likely 
+           accessing a value in another module named second_module)
+
+   THIS IS A WEAK REFERENCE, so we don't actually increment or decrement
+   the reference count of the object that ob_global_container points to.
+   This is done both for efficiency and due to the fact that it's hard
+   to cleanly write the macros for doing a decref of
+   ob_global_container when its enclosing object is being destroyed.
+
+   This means that there must be at least 1 reference elsewhere so that
+   pointed-to values aren't garbage-collected.
+
+   Note that ob_global_container should only be NON-NULL for MUTABLE
+   objects, since some immutable objects (like integers) are interned,
+   so setting ob_global_container on one might 'contaminate' all other
+   shared references to it
+
+*/
+
 #ifdef Py_TRACE_REFS
 /* Define pointers to support a doubly-linked list of all live heap objects. */
 #define _PyObject_HEAD_EXTRA		\
 	struct _object *_ob_next;	\
-	struct _object *_ob_prev;
+	struct _object *_ob_prev; \
+	struct _object *ob_global_container; \
+	unsigned long long int ob_creation_time;
 
-#define _PyObject_EXTRA_INIT 0, 0,
+#define _PyObject_EXTRA_INIT 0, 0, 0, 0,
 
 #else
-#define _PyObject_HEAD_EXTRA
-#define _PyObject_EXTRA_INIT
+#define _PyObject_HEAD_EXTRA \
+	struct _object *ob_global_container; \
+	unsigned long long int ob_creation_time;
+
+#define _PyObject_EXTRA_INIT 0, 0,
 #endif
+
 
 /* PyObject_HEAD defines the initial segment of every PyObject. */
 #define PyObject_HEAD			\
@@ -114,6 +157,11 @@ typedef struct {
 #define Py_REFCNT(ob)		(((PyObject*)(ob))->ob_refcnt)
 #define Py_TYPE(ob)		(((PyObject*)(ob))->ob_type)
 #define Py_SIZE(ob)		(((PyVarObject*)(ob))->ob_size)
+
+/* pgbovine */
+#define Py_CREATION_TIME(ob)		(((PyObject*)(ob))->ob_creation_time)
+#define Py_GLOBAL_CONTAINER_WEAKREF(ob)		(((PyObject*)(ob))->ob_global_container)
+
 
 /*
 Type objects contain a string containing the type name (to help somewhat
@@ -729,9 +777,15 @@ PyAPI_FUNC(void) _Py_AddToAllObjects(PyObject *, int force);
 /* Without Py_TRACE_REFS, there's little enough to do that we expand code
  * inline.
  */
+
+/* pgbovine - initialize the extra fields I added
+   (remember the other version for Py_TRACE_REFS in Objects/object.c) */
+extern unsigned long long int num_executed_instrs; // defined in Python/ceval.c
 #define _Py_NewReference(op) (				\
 	_Py_INC_TPALLOCS(op) _Py_COUNT_ALLOCS_COMMA	\
 	_Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA		\
+  Py_CREATION_TIME(op) = num_executed_instrs , \
+  Py_GLOBAL_CONTAINER_WEAKREF(op) = NULL , \
 	Py_REFCNT(op) = 1)
 
 #define _Py_ForgetReference(op) _Py_INC_TPFREES(op)

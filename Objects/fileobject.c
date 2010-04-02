@@ -4,6 +4,8 @@
 #include "Python.h"
 #include "structmember.h"
 
+#include "memoize.h" /* pgbovine */
+
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
 #endif /* HAVE_SYS_TYPES_H */
@@ -326,12 +328,17 @@ open_the_file(PyFileObject *f, char *name, char *mode)
 cleanup:
 	PyMem_FREE(newmode);
 
+  /* pgbovine - do this at the END after 'mode' canonicalized */
+  pg_FILE_OPEN_event(f);
+
 	return (PyObject *)f;
 }
 
 static PyObject *
 close_the_file(PyFileObject *f)
 {
+  pg_FILE_CLOSE_event(f); /* pgbovine */
+
 	int sts = 0;
 	int (*local_close)(FILE *);
 	FILE *local_fp = f->f_fp;
@@ -694,6 +701,8 @@ file_seek(PyFileObject *f, PyObject *args)
 static PyObject *
 file_truncate(PyFileObject *f, PyObject *args)
 {
+  pg_intercept_file_truncate(f, args); /* pgbovine */
+
 	Py_off_t newsize;
 	PyObject *newsizeobj = NULL;
 	Py_off_t initialpos;
@@ -1005,6 +1014,8 @@ file_read(PyFileObject *f, PyObject *args)
 	}
 	if (bytesread != buffersize)
 		_PyString_Resize(&v, bytesread);
+
+  pg_FILE_READ_event(f); /* pgbovine */
 	return v;
 }
 
@@ -1046,6 +1057,8 @@ file_readinto(PyFileObject *f, PyObject *args)
 		ntodo -= nnow;
 	}
 	PyBuffer_Release(&pbuf);
+
+  pg_FILE_READ_event(f); /* pgbovine */
 	return PyInt_FromSsize_t(ndone);
 }
 
@@ -1488,6 +1501,8 @@ file_readline(PyFileObject *f, PyObject *args)
 		return PyString_FromString("");
 	if (n < 0)
 		n = 0;
+
+  pg_FILE_READ_event(f); /* pgbovine */
 	return get_line(f, n);
 }
 
@@ -1613,6 +1628,7 @@ file_readlines(PyFileObject *f, PyObject *args)
 
 cleanup:
 	Py_XDECREF(big_buffer);
+  pg_FILE_READ_event(f); /* pgbovine */
 	return list;
 
 error:
@@ -1623,6 +1639,8 @@ error:
 static PyObject *
 file_write(PyFileObject *f, PyObject *args)
 {
+  pg_intercept_file_write(f, args); /* pgbovine */
+
 	Py_buffer pbuf;
 	char *s;
 	Py_ssize_t n, n2;
@@ -1648,6 +1666,7 @@ file_write(PyFileObject *f, PyObject *args)
 		clearerr(f->f_fp);
 		return NULL;
 	}
+
 	Py_INCREF(Py_None);
 	return Py_None;
 }
@@ -1656,6 +1675,8 @@ static PyObject *
 file_writelines(PyFileObject *f, PyObject *seq)
 {
 #define CHUNKSIZE 1000
+  pg_intercept_file_writelines(f, seq); /* pgbovine */
+
 	PyObject *list, *line;
 	PyObject *it;	/* iter(seq) */
 	PyObject *result;
@@ -1766,6 +1787,7 @@ file_writelines(PyFileObject *f, PyObject *seq)
   error:
 	Py_XDECREF(list);
   	Py_XDECREF(it);
+  
 	return result;
 #undef CHUNKSIZE
 }
@@ -1785,6 +1807,8 @@ file_xreadlines(PyFileObject *f)
 	if (PyErr_WarnPy3k("f.xreadlines() not supported in 3.x, "
 			   "try 'for line in f' instead", 1) < 0)
 	       return NULL;
+
+  pg_FILE_READ_event(f); /* pgbovine */
 	return file_self(f);
 }
 
@@ -2111,6 +2135,8 @@ file_iternext(PyFileObject *f)
 		Py_XDECREF(l);
 		return NULL;
 	}
+
+  pg_FILE_READ_event(f); /* pgbovine */
 	return (PyObject *)l;
 }
 
@@ -2288,6 +2314,8 @@ PyTypeObject PyFile_Type = {
 int
 PyFile_SoftSpace(PyObject *f, int newflag)
 {
+  pg_intercept_PyFile_SoftSpace(f, newflag); // pgbovine
+
 	long oldflag = 0;
 	if (f == NULL) {
 		/* Do nothing */
@@ -2325,6 +2353,9 @@ int
 PyFile_WriteObject(PyObject *v, PyObject *f, int flags)
 {
 	PyObject *writer, *value, *args, *result;
+
+  pg_intercept_PyFile_WriteObject(v, f, flags); // pgbovine
+
 	if (f == NULL) {
 		PyErr_SetString(PyExc_TypeError, "writeobject with NULL file");
 		return -1;
@@ -2394,6 +2425,7 @@ PyFile_WriteObject(PyObject *v, PyObject *f, int flags)
 int
 PyFile_WriteString(const char *s, PyObject *f)
 {
+  pg_intercept_PyFile_WriteString(s, f); // pgbovine
 
 	if (f == NULL) {
 		/* Should be caused by a pre-existing error */

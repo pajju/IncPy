@@ -17,6 +17,9 @@
 #include "opcode.h"
 #include "structmember.h"
 
+#include "memoize.h" /* pgbovine */
+unsigned long long int num_executed_instrs = 0; /* pgbovine - needs to be BIG to prevent overflows */
+
 #include <ctype.h>
 
 #ifndef WITH_TSC
@@ -538,6 +541,9 @@ PyEval_EvalFrame(PyFrameObject *f) {
 	return PyEval_EvalFrameEx(f, 0);
 }
 
+/* pgbovine - this seems like the main interpreter loop, which evaluates
+   ALL opcodes in a particular PyFrameObject, which represents a Python 
+   function call */
 PyObject *
 PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 {
@@ -727,6 +733,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 	if (Py_EnterRecursiveCall(""))
 		return NULL;
 
+
 	tstate->frame = f;
 
 	if (tstate->use_tracing) {
@@ -791,6 +798,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 	assert(stack_pointer != NULL);
 	f->f_stacktop = NULL;	/* remains NULL unless yield suspends frame */
 
+
 #ifdef LLTRACE
 	lltrace = PyDict_GetItemString(f->f_globals, "__lltrace__") != NULL;
 #endif
@@ -807,6 +815,34 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		why = WHY_EXCEPTION;
 		goto on_error;
 	}
+
+
+  /* pgbovine - we are about to start running the first bytecode for
+     this function, after its stack has been initialized
+    
+     We can now use co_argcount to figure out how many parameters are
+     passed on the top of the stack.  By this point, the top of the
+     stack should be populated with passed-in parameter values.  All the
+     grossness of keyword and default arguments have been resolved at
+     this point, yay!
+
+     TODO: I haven't tested support for varargs yet
+   */
+
+  // use memoized return value if available instead of executing
+  // the function
+  PyObject* memoized_retval = pg_enter_frame(f);
+
+  if (memoized_retval) {
+    // clean-up code copied and pasted from exit_eval_frame label 
+    // at the end of this function ...
+    Py_LeaveRecursiveCall();
+    tstate->frame = f->f_back;
+
+    return memoized_retval;
+  }
+  // common case --- execute this function as normal ...
+
 
 	for (;;) {
 #ifdef WITH_TSC
@@ -920,6 +956,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		opcode = NEXTOP();
 		oparg = 0;   /* allows oparg to be stored in a register because
 			it doesn't have to be remembered across a full loop */
+
+    // pgbovine - increment 'time' whenever you extract the next opcode
+    num_executed_instrs++;
+
 		if (HAS_ARG(opcode))
 			oparg = NEXTARG();
 	  dispatch_opcode:
@@ -1236,6 +1276,9 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			else
 			  slow_get:
 				x = PyObject_GetItem(v, w);
+
+      pg_BINARY_SUBSCR_event(v, w, x); // pgbovine
+
 			Py_DECREF(v);
 			Py_DECREF(w);
 			SET_TOP(x);
@@ -1505,6 +1548,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				v = NULL;
 			u = POP();
 			t = POP();
+      pg_about_to_MUTATE_event(u); // pgbovine
 			err = assign_slice(u, v, w, t); /* u[v:w] = t */
 			Py_DECREF(t);
 			Py_DECREF(u);
@@ -1526,6 +1570,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			else
 				v = NULL;
 			u = POP();
+      pg_about_to_MUTATE_event(u); // pgbovine
 			err = assign_slice(u, v, w, (PyObject *)NULL);
 							/* del u[v:w] */
 			Py_DECREF(u);
@@ -1540,6 +1585,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			u = THIRD();
 			STACKADJ(-3);
 			/* v[w] = u */
+      pg_about_to_MUTATE_event(v); // pgbovine
 			err = PyObject_SetItem(v, w, u);
 			Py_DECREF(u);
 			Py_DECREF(v);
@@ -1552,6 +1598,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			v = SECOND();
 			STACKADJ(-2);
 			/* del v[w] */
+      pg_about_to_MUTATE_event(v); // pgbovine
 			err = PyObject_DelItem(v, w);
 			Py_DECREF(v);
 			Py_DECREF(w);
@@ -1578,6 +1625,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				if (w == NULL)
 					err = -1;
 			}
+
 			Py_DECREF(v);
 			Py_XDECREF(x);
 			break;
@@ -1628,6 +1676,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			    else
 			    	PyFile_SoftSpace(w, 1);
 			}
+
 			Py_XDECREF(w);
 			Py_DECREF(v);
 			Py_XDECREF(stream);
@@ -1658,6 +1707,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 					PyFile_SoftSpace(w, 0);
 				Py_DECREF(w);
 			}
+
 			Py_XDECREF(stream);
 			stream = NULL;
 			break;
@@ -1770,6 +1820,8 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			break;
 
 		case STORE_NAME:
+      /* pgbovine - this only seems to access LOCALS, and not GLOBALS,
+         so don't worry about tracing it for pg_STORE_DEL_GLOBAL_event */
 			w = GETITEM(names, oparg);
 			v = POP();
 			if ((x = f->f_locals) != NULL) {
@@ -1787,6 +1839,8 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			break;
 
 		case DELETE_NAME:
+      /* pgbovine - this only seems to access LOCALS, and not GLOBALS,
+         so don't worry about tracing it for pg_STORE_DEL_GLOBAL_event */
 			w = GETITEM(names, oparg);
 			if ((x = f->f_locals) != NULL) {
 				if ((err = PyObject_DelItem(x, w)) != 0)
@@ -1856,6 +1910,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			w = GETITEM(names, oparg);
 			v = POP();
 			err = PyDict_SetItem(f->f_globals, w, v);
+      pg_STORE_DEL_GLOBAL_event(w); // pgbovine
 			Py_DECREF(v);
 			if (err == 0) continue;
 			break;
@@ -1865,6 +1920,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			if ((err = PyDict_DelItem(f->f_globals, w)) != 0)
 				format_exc_check_arg(
 				    PyExc_NameError, GLOBAL_NAME_ERROR_MSG, w);
+      pg_STORE_DEL_GLOBAL_event(w); // pgbovine
 			break;
 
 		case LOAD_NAME:
@@ -1889,6 +1945,8 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 					PyErr_Clear();
 				}
 			}
+      /* pgbovine - name not found in locals, checking globals 
+         and builtins */
 			if (x == NULL) {
 				x = PyDict_GetItem(f->f_globals, w);
 				if (x == NULL) {
@@ -1899,8 +1957,15 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 							    NAME_ERROR_MSG, w);
 						break;
 					}
+          Py_INCREF(x);
 				}
-				Py_INCREF(x);
+        /* pgbovine - ONLY register a LOAD_GLOBAL event on a NON-builtin */
+        else {
+          Py_INCREF(x); /* pgbovine - INCREF before calling pg_LOAD_GLOBAL_event */
+          pg_LOAD_GLOBAL_event(w, x);
+        }
+
+        /* pgbovine - SUCCESS case, found a global variable */
 			}
 			PUSH(x);
 			continue;
@@ -1919,24 +1984,30 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 					e = d->ma_lookup(d, w, hash);
 					if (e == NULL) {
 						x = NULL;
+            /* pgbovine - ERROR case, break out of interpreter loop */
 						break;
 					}
 					x = e->me_value;
 					if (x != NULL) {
 						Py_INCREF(x);
 						PUSH(x);
+            /* pgbovine - SUCCESS case, continue next iteration of interpreter loop */
+            /* pgbovine - ONLY register a LOAD_GLOBAL event on a NON-builtin */
+            pg_LOAD_GLOBAL_event(w, x);
 						continue;
 					}
 					d = (PyDictObject *)(f->f_builtins);
 					e = d->ma_lookup(d, w, hash);
 					if (e == NULL) {
 						x = NULL;
+            /* pgbovine - ERROR case, break out of interpreter loop */
 						break;
 					}
 					x = e->me_value;
 					if (x != NULL) {
 						Py_INCREF(x);
 						PUSH(x);
+            /* pgbovine - SUCCESS case, continue next iteration of interpreter loop */
 						continue;
 					}
 					goto load_global_error;
@@ -1953,9 +2024,18 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 						    GLOBAL_NAME_ERROR_MSG, w);
 					break;
 				}
+        Py_INCREF(x);
 			}
-			Py_INCREF(x);
+      /* pgbovine - ONLY register a LOAD_GLOBAL event on a NON-builtin */
+      else {
+        Py_INCREF(x); /* pgbovine - INCREF before calling pg_LOAD_GLOBAL_event */
+        pg_LOAD_GLOBAL_event(w, x);
+      }
+
 			PUSH(x);
+
+      /* pgbovine - SUCCESS case, continue next iteration of interpreter loop */
+
 			continue;
 
 		case DELETE_FAST:
@@ -2047,6 +2127,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			v = THIRD();   /* dict */
 			STACKADJ(-2);
 			assert (PyDict_CheckExact(v));
+      pg_about_to_MUTATE_event(v); // pgbovine
 			err = PyDict_SetItem(v, w, u);  /* v[w] = u */
 			Py_DECREF(u);
 			Py_DECREF(w);
@@ -2726,6 +2807,11 @@ exit_eval_frame:
 	Py_LeaveRecursiveCall();
 	tstate->frame = f->f_back;
 
+
+  /* pgbovine - I *think* this is the only exit from this LONG function */
+  pg_exit_frame(f, retval);
+
+
 	return retval;
 }
 
@@ -2733,6 +2819,8 @@ exit_eval_frame:
    PyEval_EvalFrame() and PyEval_EvalCodeEx() you will need to adjust
    the test in the if statements in Misc/gdbinit (pystack and pystackv). */
 
+/* pgbovine - this seems like a good point to intercept function
+   entrances, since we can grab the arguments here */
 PyObject *
 PyEval_EvalCodeEx(PyCodeObject *co, PyObject *globals, PyObject *locals,
 	   PyObject **args, int argcount, PyObject **kws, int kwcount,
@@ -2788,11 +2876,14 @@ PyEval_EvalCodeEx(PyCodeObject *co, PyObject *globals, PyObject *locals,
 			}
 			n = co->co_argcount;
 		}
+    /* pgbovine - hmmm, handling regular positional arguments */
 		for (i = 0; i < n; i++) {
 			x = args[i];
 			Py_INCREF(x);
 			SETLOCAL(i, x);
 		}
+
+    /* pgbovine - hmmm, handling varargs by bundling them into a tuple */
 		if (co->co_flags & CO_VARARGS) {
 			u = PyTuple_New(argcount - n);
 			if (u == NULL)
@@ -2804,6 +2895,8 @@ PyEval_EvalCodeEx(PyCodeObject *co, PyObject *globals, PyObject *locals,
 				PyTuple_SET_ITEM(u, i-n, x);
 			}
 		}
+    /* pgbovine - hmmm, handling keyword arguments - seems to populate
+       'kwdict' ... maybe we can grab that */
 		for (i = 0; i < kwcount; i++) {
 			PyObject **co_varnames;
 			PyObject *keyword = kws[2*i];
@@ -2964,6 +3057,9 @@ kw_found:
 		 * and return that as the value. */
 		return PyGen_New(f);
 	}
+
+  /* pgbovine - after all this setup and muddling, we finally 
+     call PyEval_EvalFrameEx */
 
 	retval = PyEval_EvalFrameEx(f,0);
 
@@ -3752,6 +3848,8 @@ call_function(PyObject ***pp_stack, int oparg
    done before evaluating the frame.
 */
 
+/* pgbovine - this seems like a good point to intercept function
+   entrances, since we can grab the arguments here */
 static PyObject *
 fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 {
@@ -3765,6 +3863,9 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 	PCALL(PCALL_FAST_FUNCTION);
 	if (argdefs == NULL && co->co_argcount == n && nk==0 &&
 	    co->co_flags == (CO_OPTIMIZED | CO_NEWLOCALS | CO_NOFREE)) {
+    /* pgbovine - this seems like the fast case ... we just call
+       PyEval_EvalFrameEx directly without calling PyEval_EvalCodeEx */
+
 		PyFrameObject *f;
 		PyObject *retval = NULL;
 		PyThreadState *tstate = PyThreadState_GET();
@@ -3789,6 +3890,10 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 			Py_INCREF(*stack);
 			fastlocals[i] = *stack++;
 		}
+
+    /* pgbovine - after all this setup and muddling, we finally 
+       call PyEval_EvalFrameEx */
+
 		retval = PyEval_EvalFrameEx(f,0);
 		++tstate->recursion_depth;
 		Py_DECREF(f);
@@ -3799,6 +3904,9 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 		d = &PyTuple_GET_ITEM(argdefs, 0);
 		nd = Py_SIZE(argdefs);
 	}
+
+  /* pgbovine - this seems like the slow case, punt to
+     PyEval_EvalCodeEx ... make sure NOT to double-count */
 	return PyEval_EvalCodeEx(co, globals,
 				 (PyObject *)NULL, (*pp_stack)-n, na,
 				 (*pp_stack)-2*nk, nk, d, nd,
@@ -4339,6 +4447,10 @@ build_class(PyObject *methods, PyObject *bases, PyObject *name)
 		}
 		PyErr_Restore(ptype, pvalue, ptraceback);
 	}
+
+  /* pgbovine - this is intrusive, but oh wellz */
+  pg_BUILD_CLASS_event(name, methods);
+
 	return result;
 }
 

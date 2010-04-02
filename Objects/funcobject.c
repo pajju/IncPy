@@ -57,6 +57,12 @@ PyFunction_New(PyObject *code, PyObject *globals)
 	else
 		return NULL;
 	_PyObject_GC_TRACK(op);
+
+
+  /* pgbovine - this is ugly, but it's a way to record all function objects
+     as they are being created */
+  pg_CREATE_FUNCTION_event(op);
+
 	return (PyObject *)op;
 }
 

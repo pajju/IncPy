@@ -2480,6 +2480,8 @@ PyObject_CallObject(PyObject *o, PyObject *a)
 	return PyEval_CallObjectWithKeywords(o, a, NULL);
 }
 
+/* pgbovine - this seems to be the entry point for many Python (not
+   built-in C) function calls involving object methods */
 PyObject *
 PyObject_Call(PyObject *func, PyObject *arg, PyObject *kw)
 {

@@ -434,6 +434,15 @@ frame_dealloc(PyFrameObject *f)
 	Py_CLEAR(f->f_exc_value);
 	Py_CLEAR(f->f_exc_traceback);
 
+  /* pgbovine */
+  Py_CLEAR(f->stdout_cStringIO);
+  Py_CLEAR(f->stderr_cStringIO);
+  Py_CLEAR(f->files_opened_w_set);
+  Py_CLEAR(f->files_written_set);
+  Py_CLEAR(f->files_closed_set);
+  Py_CLEAR(f->globals_read_set);
+
+
 	co = f->f_code;
 	if (co->co_zombieframe == NULL)
 		co->co_zombieframe = f;
@@ -702,6 +711,21 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
 	f->f_iblock = 0;
 
 	_PyObject_GC_TRACK(f);
+
+  /* pgbovine - NULL out ALL the extra fields that I added */
+  f->start_time.tv_sec = 0;
+  f->start_time.tv_usec = 0;
+  f->end_time.tv_sec = 0;
+  f->end_time.tv_usec = 0;
+  f->start_instr_time = 0;
+  f->stdout_cStringIO = NULL;
+  f->stderr_cStringIO = NULL;
+  f->files_opened_w_set = NULL;
+  f->files_written_set = NULL;
+  f->files_closed_set = NULL;
+  f->globals_read_set = NULL;
+  f->func_memo_info = NULL;
+
 	return f;
 }
 

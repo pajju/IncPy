@@ -67,6 +67,8 @@ PyCFunction_GetFlags(PyObject *op)
 	return ((PyCFunctionObject *)op) -> m_ml -> ml_flags;
 }
 
+/* pgbovine - this seems to be the entry point for built-in C
+   function calls, so intercept them here */
 PyObject *
 PyCFunction_Call(PyObject *func, PyObject *arg, PyObject *kw)
 {
@@ -74,6 +76,8 @@ PyCFunction_Call(PyObject *func, PyObject *arg, PyObject *kw)
 	PyCFunction meth = PyCFunction_GET_FUNCTION(func);
 	PyObject *self = PyCFunction_GET_SELF(func);
 	Py_ssize_t size;
+
+  //printf("PyCFunction_Call: %s\n", PyEval_GetFuncName(func)); /* pgbovine */
 
 	switch (PyCFunction_GET_FLAGS(func) & ~(METH_CLASS | METH_STATIC | METH_COEXIST)) {
 	case METH_VARARGS:
