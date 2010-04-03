@@ -325,7 +325,7 @@ static void private_CREATE_FUNCTION(PyObject* func) {
        session, the code for a function might actually change, since
        it's been reloaded from the source file.
 
-       (See incpy-tests/small-tests/execfile_2 for a test case)
+       (See IncPy-regression-tests/execfile_2 for a test case)
 
        The proper solution is to keep links from each FuncMemoInfo entry
        to all of its callers, so that we can simply invalidate that
@@ -655,14 +655,15 @@ void pg_finalize() {
    all its called functions (code dependencies) and check their
    dependencies as well ... and keep recursing until we get to leaf
    functions with no callees.
-  
-   TODO: this will infinite loop when there are cycles in the code
-   dependency graph
 */
 static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
                                       PyFrameObject* cur_frame) {
   PyObject* canonical_name = GET_CANONICAL_NAME(my_func_memo_info);
   assert(canonical_name);
+
+  // this will be used to prevent infinite loops when there are circular
+  // dependencies (see IncPy-regression-tests/circular_code_dependency/)
+  my_func_memo_info->last_dep_check_instr_time = num_executed_instrs;
 
   Py_ssize_t pos; // must reset on every iterator call, or else does the wrong thing
 
@@ -845,8 +846,10 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
 
     assert(called_func_memo_info);
 
-    // don't recurse on YOURSELF since that will lead to an infinite loop
-    if (called_func_memo_info == my_func_memo_info) {
+    // don't recurse on a function that we've already checked, or else
+    // you will infinite loop:
+    if (my_func_memo_info->last_dep_check_instr_time == 
+        called_func_memo_info->last_dep_check_instr_time) {
       continue;
     }
 
@@ -1031,7 +1034,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     // and return the copy to the caller.  See this test for why
     // we need to return a copy:
     //
-    //   incpy/incpy-tests/small-tests/cow_func_retval/
+    //   IncPy-regression-tests/cow_func_retval/
 #ifdef ENABLE_COW
     // defer the deepcopy until elt has been mutated
     memoized_retval_copy = memoized_retval;
@@ -1056,7 +1059,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     // if found, print memoized buffers to stdout/stderr
     // and also append them to the buffers of all of your callers
     // so that if they are later skipped, then they can properly replay
-    // your buffers (see incpy-tests/small-tests/stdout_nested_2/)
+    // your buffers (see IncPy-regression-tests/stdout_nested_2/)
     if (memoized_stdout_buf) {
       PyObject* outf = PySys_GetObject("stdout");
       PyFile_WriteString(PyString_AsString(memoized_stdout_buf), outf);
