@@ -207,6 +207,23 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
 }
 
 
+// returns 1 if s appears as a PREFIX of some element in ignore_paths_lst
+static int prefix_in_ignore_paths_lst(char* s) {
+  assert(ignore_paths_lst);
+  Py_ssize_t i;
+  for (i = 0; i < PyList_Size(ignore_paths_lst); i++) {
+    PyObject* elt = PyList_GET_ITEM(ignore_paths_lst, i);
+    char* path_str = PyString_AsString(elt);
+    // we're doing a prefix match, so remember to use strncmp
+    if (strncmp(s, path_str, strlen(path_str)) == 0) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+
 /* Return 1 if we want to ignore the code object given by co (which sets
    its pg_ignore field to 1 from PyCode_New()), 0 otherwise.
  
@@ -236,18 +253,10 @@ int pg_ignore_code(PyCodeObject* co) {
     return 1;
   }
 
-  // 4. ignore code from files whose paths start with elements
-  // of ignore_paths_lst
-  assert(ignore_paths_lst); // should be initialized at this point
-  Py_ssize_t i;
-  for (i = 0; i < PyList_Size(ignore_paths_lst); i++) {
-    PyObject* elt = PyList_GET_ITEM(ignore_paths_lst, i);
-    char* path_str = PyString_AsString(elt);
-    // we're doing a prefix match, so remember to use strncmp
-    if (strncmp(PyString_AsString(co->co_filename), path_str, 
-                strlen(path_str)) == 0) {
-      return 1;
-    }
+  // 4. ignore code from files whose paths start with some element of
+  //    ignore_paths_lst
+  if (prefix_in_ignore_paths_lst(PyString_AsString(co->co_filename))) {
+    return 1;
   }
 
   return 0;
@@ -1735,6 +1744,7 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
 
   MEMOIZE_PUBLIC_START()
   assert(top_frame);
+
   PyObject* new_varname = create_varname_tuple(top_frame->f_code->co_filename, varname);
 
   add_global_read_to_top_frame(new_varname);
@@ -1882,28 +1892,21 @@ void pg_about_to_MUTATE_event(PyObject *object) {
   if (IS_GLOBALLY_REACHABLE(object)) {
     PyObject* global_container = Py_GLOBAL_CONTAINER_WEAKREF(object);
 
-    /* SUPER HACK: ignore mutations to global variables defined
-       in standard library files.  although technically this isn't
-       correct, it's a cheap workaround for the fact that some libraries
-       (like re.py) implement global caches (see _cache dict in re.py)
-       and actually mutate them when doing otherwise pure operations.
+    /* SUPER HACK: ignore mutations to global variables defined in files
+       whose paths are in ignore_paths_lst (e.g., standard library code)
+       Although technically this isn't correct, it's a cheap workaround
+       for the fact that some libraries (like re.py) implement global
+       caches (see _cache dict in re.py) and actually mutate them when
+       doing otherwise pure operations.
 
-       We are assuming that standard library functions are pure from the
-       perspective of client code, which I think is fairly reasonable.
-
-       Also, we must customize this path later for portability ...
-       maybe in a configure or Makefile somewhere. */
+       We are assuming that functions in ignore_paths_lst (e.g.,
+       standard library functions) are pure from the perspective of
+       client code, which I think is fairly reasonable. */
     assert(global_container && PyTuple_CheckExact(global_container));
     PyObject* filename = PyTuple_GET_ITEM(global_container, 0);
-
-    // TODO: generalize this using ignore_paths_lst but also instead
-    // of doing the check at mutation time, do the check at LOAD_GLOBAL
-    // time and simply don't mark it as a global to track for
-    // reachability (this also has the effect of not adding global
-    // variable dependencies on variables defined in ignore_paths_lst)
-    if (!strncmp("/Users/pgbovine/IncPy/Lib/", 
-                 PyString_AsString(filename), 26)) {
-      MEMOIZE_PUBLIC_END() // don't forget this!!!
+    assert(filename);
+    if (prefix_in_ignore_paths_lst(PyString_AsString(filename))) {
+      MEMOIZE_PUBLIC_END()
       return;
     }
 
