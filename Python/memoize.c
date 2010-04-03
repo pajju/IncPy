@@ -236,19 +236,19 @@ int pg_ignore_code(PyCodeObject* co) {
     return 1;
   }
 
-  // 4. ignore code from the standard library:
-  //
-  // We must customize this path later for portability ...
-  // maybe in a configure or Makefile somewhere
-  /*
-  if (!strncmp("/Users/pgbovine/IncPy/Lib/", 
-               PyString_AsString(co->co_filename), 26)) {
-    return 1;
+  // 4. ignore code from files whose paths start with elements
+  // of ignore_paths_lst
+  assert(ignore_paths_lst); // should be initialized at this point
+  Py_ssize_t i;
+  for (i = 0; i < PyList_Size(ignore_paths_lst); i++) {
+    PyObject* elt = PyList_GET_ITEM(ignore_paths_lst, i);
+    char* path_str = PyString_AsString(elt);
+    // we're doing a prefix match, so remember to use strncmp
+    if (strncmp(PyString_AsString(co->co_filename), path_str, 
+                strlen(path_str)) == 0) {
+      return 1;
+    }
   }
-  */
-
-  // TODO: implement a config file where the user can specify which
-  // files to ignore
 
   return 0;
 }
