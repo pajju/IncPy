@@ -178,7 +178,8 @@ PyFrameObject* top_frame = NULL;
 
 // A list of paths to ignore for the purposes of tracking code
 // dependencies and impure actions (specified in $HOME/incpy.config)
-// (the entries should all be absolute paths of existent directories or files)
+//
+// Each element should be an absolute path of an existent file or directory
 static PyObject* ignore_paths_lst = NULL;
 
 
@@ -559,6 +560,7 @@ void pg_initialize() {
         PyObject* ignore_abspath = PyObject_Call(abspath_func, tmp_tup, NULL);
         Py_DECREF(tmp_tup);
 
+        // then check to see whether it's an existent file or directory
         tmp_tup = PyTuple_Pack(1, ignore_abspath);
         PyObject* exists_func = PyObject_GetAttrString(path_module, "exists");
         PyObject* path_exists_bool = PyObject_Call(exists_func, tmp_tup, NULL);
@@ -1881,6 +1883,11 @@ void pg_about_to_MUTATE_event(PyObject *object) {
     assert(global_container && PyTuple_CheckExact(global_container));
     PyObject* filename = PyTuple_GET_ITEM(global_container, 0);
 
+    // TODO: generalize this using ignore_paths_lst but also instead
+    // of doing the check at mutation time, do the check at LOAD_GLOBAL
+    // time and simply don't mark it as a global to track for
+    // reachability (this also has the effect of not adding global
+    // variable dependencies on variables defined in ignore_paths_lst)
     if (!strncmp("/Users/pgbovine/IncPy/Lib/", 
                  PyString_AsString(filename), 26)) {
       MEMOIZE_PUBLIC_END() // don't forget this!!!
