@@ -211,8 +211,15 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
    its pg_ignore field to 1 from PyCode_New()), 0 otherwise.
  
    We do this at the time when a code object is created, so that we
-   don't have to do these checks every time a function is called. */
+   don't have to do these checks every time a function is called. 
+
+   Run this after pg_create_canonical_code_name(). */
 int pg_ignore_code(PyCodeObject* co) {
+  // 0. Ignore code without a canonical name
+  if (!co->pg_canonical_name) {
+    return 1;
+  }
+
   // 1. do a SUPER cheap check for generators and ignore those
   if (co->co_flags & CO_GENERATOR) {
     return 1;
@@ -234,10 +241,12 @@ int pg_ignore_code(PyCodeObject* co) {
   //
   // We must customize this path later for portability ...
   // maybe in a configure or Makefile somewhere
+  /*
   if (!strncmp("/Users/pgbovine/IncPy/Lib/", 
                PyString_AsString(co->co_filename), 26)) {
     return 1;
   }
+  */
 
   // TODO: implement a config file where the user can specify which
   // files to ignore
@@ -257,6 +266,9 @@ int pg_ignore_code(PyCodeObject* co) {
    For efficiency, we should only do this at the time when a code object
    is created, setting its pg_canonical_name field. */
 PyObject* pg_create_canonical_code_name(PyCodeObject* this_code) {
+  // don't use MEMOIZE_PUBLIC_START/END here since we want to
+  // create canonical names for code that existed before pg_initialize
+
   PyObject* classname = this_code->co_classname; // could be NULL
 
   PyObject* name = this_code->co_name;
@@ -388,13 +400,15 @@ void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict) {
       // subtle! sometimes the entry for old_canonical_name might have
       // already been deleted, if, say there were an identically-named
       // method shared by 2 or more classes NESTED within one another
-      if (PyDict_Contains(func_name_to_code_dependency, old_canonical_name)) {
+      if (old_canonical_name &&
+          PyDict_Contains(func_name_to_code_dependency, old_canonical_name)) {
         PyDict_DelItem(func_name_to_code_dependency, old_canonical_name);
       }
 
       // keep func_name_to_code_object in-sync with
       // func_name_to_code_dependency ...
-      if (PyDict_Contains(func_name_to_code_object, old_canonical_name)) {
+      if (old_canonical_name &&
+          PyDict_Contains(func_name_to_code_object, old_canonical_name)) {
         PyDict_DelItem(func_name_to_code_object, old_canonical_name);
       }
 
@@ -416,6 +430,7 @@ void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict) {
       // also update pg_canonical_name to reflect new co_classname
       Py_CLEAR(cod->pg_canonical_name); // nullify old value
       cod->pg_canonical_name = pg_create_canonical_code_name(cod);
+      cod->pg_ignore = pg_ignore_code(cod); // keep this in-sync with pg_canonical_name
 
       // create a fresh new code_dependency object for the method
       // with its newly-set co_classname field
@@ -771,9 +786,6 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
 
   // Code dependencies:
 
-  // you must at least have a code dependency on YOURSELF
-  assert(my_func_memo_info->code_dependencies);
-
   // Optimization: assuming that code doesn't change in the middle of
   // execution (which is a prety safe assumption), we only need to do
   // this check ONCE at the beginning of execution and not on each call 
@@ -781,7 +793,8 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
   // Caveat: if code is re-loaded in the middle of execution, it CAN
   // actually change, so all_code_deps_SAT must be set to 0 in those
   // cases (grep for 'all_code_deps_SAT' to see where that occurs)
-  if (!my_func_memo_info->all_code_deps_SAT) {
+  if (my_func_memo_info->code_dependencies &&
+      !my_func_memo_info->all_code_deps_SAT) {
     PyObject* dependent_func_canonical_name = NULL;
     PyObject* memoized_code_dependency = NULL;
     pos = 0; // reset it!
@@ -939,23 +952,26 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
   PyObject* called_func_name = NULL;
   PyObject* unused_junk = NULL;
   pos = 0; // reset it!
-  while (PyDict_Next(my_func_memo_info->code_dependencies,
-                     &pos, &called_func_name, &unused_junk)) {
-    PyObject* called_func_cod = PyDict_GetItem(func_name_to_code_object, called_func_name);
-    assert(PyCode_Check(called_func_cod));
-    FuncMemoInfo* called_func_memo_info =
-      get_func_memo_info_from_cod((PyCodeObject*)called_func_cod);
+  if (my_func_memo_info->code_dependencies) {
 
-    assert(called_func_memo_info);
+    while (PyDict_Next(my_func_memo_info->code_dependencies,
+                       &pos, &called_func_name, &unused_junk)) {
+      PyObject* called_func_cod = PyDict_GetItem(func_name_to_code_object, called_func_name);
+      assert(PyCode_Check(called_func_cod));
+      FuncMemoInfo* called_func_memo_info =
+        get_func_memo_info_from_cod((PyCodeObject*)called_func_cod);
 
-    // don't recurse on YOURSELF since that will lead to an infinite loop
-    if (called_func_memo_info == my_func_memo_info) {
-      continue;
-    }
+      assert(called_func_memo_info);
 
-    if (!are_dependencies_satisfied(called_func_memo_info, cur_frame)) {
-      all_child_dependencies_satisfied = 0;
-      break;
+      // don't recurse on YOURSELF since that will lead to an infinite loop
+      if (called_func_memo_info == my_func_memo_info) {
+        continue;
+      }
+
+      if (!are_dependencies_satisfied(called_func_memo_info, cur_frame)) {
+        all_child_dependencies_satisfied = 0;
+        break;
+      }
     }
   }
 
@@ -998,18 +1014,17 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     // caller_func_memo_info doesn't exist for top-level modules:
     if (caller_func_memo_info) {
       PyObject* caller_code_deps = caller_func_memo_info->code_dependencies;
-      assert(caller_code_deps);
       // Optimizaton: avoid adding duplicates (there will be MANY duplicates 
       // throughout a long-running script with lots of function calls)
-      if (!PyDict_Contains(caller_code_deps, co->pg_canonical_name)) {
+      if (caller_code_deps && !PyDict_Contains(caller_code_deps, co->pg_canonical_name)) {
         // add a code dependency in your caller to the most up-to-date
         // code for THIS function (not a previously-saved version of the
         // code, since later we might discover it to be outdated!)
         PyObject* my_self_code_dependency = 
           PyDict_GetItem(func_name_to_code_dependency, co->pg_canonical_name);
-        assert(my_self_code_dependency);
 
-        PyDict_SetItem(caller_code_deps, co->pg_canonical_name, my_self_code_dependency);
+        if (my_self_code_dependency)
+          PyDict_SetItem(caller_code_deps, co->pg_canonical_name, my_self_code_dependency);
       }
     }
   }
