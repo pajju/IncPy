@@ -176,6 +176,12 @@ static PyObject* func_name_to_code_object = NULL;
 PyFrameObject* top_frame = NULL;
 
 
+// A list of paths to ignore for the purposes of tracking code
+// dependencies and impure actions (specified in $HOME/incpy.config)
+// (the entries should all be absolute paths of existent directories or files)
+static PyObject* ignore_paths_lst = NULL;
+
+
 // returns 1 iff "obj1 == obj2" in Python-world
 // (can be SLOW when comparing large objects)
 int obj_equals(PyObject* obj1, PyObject* obj2) {
@@ -492,9 +498,103 @@ void pg_initialize() {
   PyObject* os_module = PyImport_ImportModule("os"); // increments refcount
   PyObject* path_module = PyObject_GetAttrString(os_module, "path");
   abspath_func = PyObject_GetAttrString(path_module, "abspath");
+  assert(abspath_func);
+
+
+  // look for the mandatory incpy.config file in $HOME
+  // using os.path.join(os.getenv('HOME'), 'incpy.config')
+  PyObject* getenv_func = PyObject_GetAttrString(os_module, "getenv");
+  PyObject* join_func = PyObject_GetAttrString(path_module, "join");
+
+  PyObject* tmp_str = PyString_FromString("HOME");
+  PyObject* tmp_tup = PyTuple_Pack(1, tmp_str);
+  PyObject* homedir = PyObject_Call(getenv_func, tmp_tup, NULL);
+  assert(homedir);
+  Py_DECREF(tmp_tup);
+  Py_DECREF(tmp_str);
+
+  tmp_str = PyString_FromString("incpy.config");
+  tmp_tup = PyTuple_Pack(2, homedir, tmp_str);
+  PyObject* incpy_config_path = PyObject_Call(join_func, tmp_tup, NULL);
+  assert(incpy_config_path);
+
+  Py_DECREF(tmp_tup);
+  Py_DECREF(tmp_str);
+  Py_DECREF(homedir);
+
+  // parse incpy.config to look for lines of the following form:
+  //   ignore = <prefix of path to ignore>
+  ignore_paths_lst = PyList_New(0);
+
+  PyObject* config_file = PyFile_FromString(PyString_AsString(incpy_config_path), "r");
+  if (!config_file) {
+    printf("Error: IncPy config file not found.\nPlease create a proper config file here: %s\n",
+           PyString_AsString(incpy_config_path));
+    exit(1);
+  }
+
+  PyObject* readlines_func = PyObject_GetAttrString(config_file, "readlines");
+  PyObject* all_lines = PyObject_CallFunctionObjArgs(readlines_func, NULL);
+  PyObject* split_str = PyString_FromString("split");
+  PyObject* strip_str = PyString_FromString("strip");
+  PyObject* equal_str = PyString_FromString("=");
+
+  Py_ssize_t i;
+  for (i = 0; i < PyList_Size(all_lines); i++) {
+    PyObject* line = PyList_GET_ITEM(all_lines, i);
+    PyObject* toks = PyObject_CallMethodObjArgs(line, split_str, equal_str, NULL);
+    assert(toks);
+    // we are looking for tokens of the form 'ignore = <path prefix>'
+    if (PyList_Size(toks) == 2) {
+      PyObject* lhs = PyList_GET_ITEM(toks, 0);
+      PyObject* rhs = PyList_GET_ITEM(toks, 1);
+      // strip both:
+      PyObject* lhs_stripped = PyObject_CallMethodObjArgs(lhs, strip_str, NULL);
+      PyObject* rhs_stripped = PyObject_CallMethodObjArgs(rhs, strip_str, NULL);
+
+      // woohoo, we have a winner!
+      if (strcmp(PyString_AsString(lhs_stripped), "ignore") == 0) {
+        // first grab the absolute path:
+        tmp_tup = PyTuple_Pack(1, rhs_stripped);
+        PyObject* ignore_abspath = PyObject_Call(abspath_func, tmp_tup, NULL);
+        Py_DECREF(tmp_tup);
+
+        tmp_tup = PyTuple_Pack(1, ignore_abspath);
+        PyObject* exists_func = PyObject_GetAttrString(path_module, "exists");
+        PyObject* path_exists_bool = PyObject_Call(exists_func, tmp_tup, NULL);
+        Py_DECREF(tmp_tup);
+        Py_DECREF(exists_func);
+
+        if (!PyObject_IsTrue(path_exists_bool)) {
+          printf("Error: The ignore path %s\n       specified in incpy.config does not exist\n",
+                 PyString_AsString(ignore_abspath));
+          exit(1);
+        }
+
+        PyList_Append(ignore_paths_lst, ignore_abspath);
+        Py_DECREF(path_exists_bool);
+        Py_DECREF(ignore_abspath);
+      }
+
+      Py_DECREF(lhs_stripped);
+      Py_DECREF(rhs_stripped);
+    }
+
+    Py_DECREF(toks);
+  }
+
+  Py_DECREF(equal_str);
+  Py_DECREF(strip_str);
+  Py_DECREF(split_str);
+  Py_DECREF(all_lines);
+  Py_DECREF(readlines_func);
+  Py_DECREF(config_file);
+  Py_DECREF(incpy_config_path);
+
+  Py_DECREF(getenv_func);
+  Py_DECREF(join_func);
   Py_DECREF(path_module);
   Py_DECREF(os_module);
-  assert(abspath_func);
 
 
   // global data structures:
@@ -621,6 +721,7 @@ void pg_finalize() {
   Py_CLEAR(func_name_to_code_object);
   Py_CLEAR(cow_containment_dict);
   Py_CLEAR(cow_traced_addresses_set);
+  Py_CLEAR(ignore_paths_lst);
 
   // function pointers
   Py_CLEAR(deepcopy_func);
