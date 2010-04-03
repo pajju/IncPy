@@ -33,16 +33,14 @@ FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod) {
   // then set f_code's pointer BACK to yourself
   cod->pg_func_memo_info = new_fmi;
 
-  new_fmi->code_dependencies = PyDict_New();
-
   PyObject* cur_code_dependency = 
     PyDict_GetItem(func_name_to_code_dependency, cod->pg_canonical_name);
+  assert(cur_code_dependency);
 
   // create self-dependency:
-  if (cur_code_dependency) {
-    PyDict_SetItem(new_fmi->code_dependencies, 
-                   cod->pg_canonical_name, cur_code_dependency);
-  }
+  new_fmi->code_dependencies = PyDict_New();
+  PyDict_SetItem(new_fmi->code_dependencies, 
+                 cod->pg_canonical_name, cur_code_dependency);
 
   return new_fmi;
 }

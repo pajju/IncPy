@@ -211,12 +211,11 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
    its pg_ignore field to 1 from PyCode_New()), 0 otherwise.
  
    We do this at the time when a code object is created, so that we
-   don't have to do these checks every time a function is called. 
-
-   Run this after pg_create_canonical_code_name(). */
+   don't have to do these checks every time a function is called. */
 int pg_ignore_code(PyCodeObject* co) {
-  // 0. Ignore code without a canonical name
-  if (!co->pg_canonical_name) {
+  // 0. ignore all code created before pg_initialize() has been called,
+  // since we don't have enough info to track those code objects anyways
+  if (!pg_activated) {
     return 1;
   }
 
@@ -264,10 +263,9 @@ int pg_ignore_code(PyCodeObject* co) {
    ABSOLUTE PATH of the filename
 
    For efficiency, we should only do this at the time when a code object
-   is created, setting its pg_canonical_name field. */
+   is created, which sets its pg_canonical_name field. */
 PyObject* pg_create_canonical_code_name(PyCodeObject* this_code) {
-  // don't use MEMOIZE_PUBLIC_START/END here since we want to
-  // create canonical names for code that existed before pg_initialize
+  MEMOIZE_PUBLIC_START_RETNULL()
 
   PyObject* classname = this_code->co_classname; // could be NULL
 
@@ -277,19 +275,9 @@ PyObject* pg_create_canonical_code_name(PyCodeObject* this_code) {
   assert(PyString_CheckExact(name));
   assert(PyString_CheckExact(filename));
 
-  PyObject* filename_abspath = NULL;
-
-  // if abspath_func hasn't been initialized yet, then we can't use it,
-  // so we must simply use filename :(
-  if (abspath_func) {
-    PyObject* tup = PyTuple_Pack(1, filename);
-    filename_abspath = PyObject_Call(abspath_func, tup, NULL);
-    Py_DECREF(tup);
-  }
-  else {
-    filename_abspath = filename;
-    Py_INCREF(filename); // since we've created an extra reference to it
-  }
+  PyObject* tup = PyTuple_Pack(1, filename);
+  PyObject* filename_abspath = PyObject_Call(abspath_func, tup, NULL);
+  Py_DECREF(tup);
 
   assert(filename_abspath);
 
@@ -315,6 +303,7 @@ PyObject* pg_create_canonical_code_name(PyCodeObject* this_code) {
   assert(ret);
   Py_DECREF(filename_abspath);
 
+  MEMOIZE_PUBLIC_END()
   return ret;
 }
 
@@ -344,7 +333,7 @@ static void private_CREATE_FUNCTION(PyObject* func) {
        session, the code for a function might actually change, since
        it's been reloaded from the source file.
 
-       (See incpy-tests/small-tests/execfile_2 for a test case)
+       (See IncPy-regression-tests/execfile_2 for a test case)
 
        The proper solution is to keep links from each FuncMemoInfo entry
        to all of its callers, so that we can simply invalidate that
@@ -389,6 +378,8 @@ void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict) {
       PyFunctionObject* f = (PyFunctionObject*)val;
       PyCodeObject* cod = (PyCodeObject*)f->func_code;
 
+      assert(cod->pg_canonical_name);
+
       // THIS IS REALLY SUBTLE BUT IMPORTANT ... by this point, there
       // should already be an entry in func_name_to_code_dependency with
       // the original canonical name of cod (before its co_classname is
@@ -400,15 +391,13 @@ void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict) {
       // subtle! sometimes the entry for old_canonical_name might have
       // already been deleted, if, say there were an identically-named
       // method shared by 2 or more classes NESTED within one another
-      if (old_canonical_name &&
-          PyDict_Contains(func_name_to_code_dependency, old_canonical_name)) {
+      if (PyDict_Contains(func_name_to_code_dependency, old_canonical_name)) {
         PyDict_DelItem(func_name_to_code_dependency, old_canonical_name);
       }
 
       // keep func_name_to_code_object in-sync with
       // func_name_to_code_dependency ...
-      if (old_canonical_name &&
-          PyDict_Contains(func_name_to_code_object, old_canonical_name)) {
+      if (PyDict_Contains(func_name_to_code_object, old_canonical_name)) {
         PyDict_DelItem(func_name_to_code_object, old_canonical_name);
       }
 
@@ -429,8 +418,13 @@ void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict) {
 
       // also update pg_canonical_name to reflect new co_classname
       Py_CLEAR(cod->pg_canonical_name); // nullify old value
+
+      // TRICKY! Temporarily set pg_activated to 1 so that 
+      // pg_create_canonical_code_name will actually run instead
+      // of punting
+      pg_activated = 1;
       cod->pg_canonical_name = pg_create_canonical_code_name(cod);
-      cod->pg_ignore = pg_ignore_code(cod); // keep this in-sync with pg_canonical_name
+      pg_activated = 0;
 
       // create a fresh new code_dependency object for the method
       // with its newly-set co_classname field
@@ -773,18 +767,22 @@ void pg_finalize() {
    all its called functions (code dependencies) and check their
    dependencies as well ... and keep recursing until we get to leaf
    functions with no callees.
-  
-   TODO: this will infinite loop when there are cycles in the code
-   dependency graph
 */
 static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
                                       PyFrameObject* cur_frame) {
   PyObject* canonical_name = GET_CANONICAL_NAME(my_func_memo_info);
   assert(canonical_name);
 
+  // this will be used to prevent infinite loops when there are circular
+  // dependencies (see IncPy-regression-tests/circular_code_dependency/)
+  my_func_memo_info->last_dep_check_instr_time = num_executed_instrs;
+
   Py_ssize_t pos; // must reset on every iterator call, or else does the wrong thing
 
   // Code dependencies:
+
+  // you must at least have a code dependency on YOURSELF
+  assert(my_func_memo_info->code_dependencies);
 
   // Optimization: assuming that code doesn't change in the middle of
   // execution (which is a prety safe assumption), we only need to do
@@ -793,8 +791,7 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
   // Caveat: if code is re-loaded in the middle of execution, it CAN
   // actually change, so all_code_deps_SAT must be set to 0 in those
   // cases (grep for 'all_code_deps_SAT' to see where that occurs)
-  if (my_func_memo_info->code_dependencies &&
-      !my_func_memo_info->all_code_deps_SAT) {
+  if (!my_func_memo_info->all_code_deps_SAT) {
     PyObject* dependent_func_canonical_name = NULL;
     PyObject* memoized_code_dependency = NULL;
     pos = 0; // reset it!
@@ -952,26 +949,25 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
   PyObject* called_func_name = NULL;
   PyObject* unused_junk = NULL;
   pos = 0; // reset it!
-  if (my_func_memo_info->code_dependencies) {
+  while (PyDict_Next(my_func_memo_info->code_dependencies,
+                     &pos, &called_func_name, &unused_junk)) {
+    PyObject* called_func_cod = PyDict_GetItem(func_name_to_code_object, called_func_name);
+    assert(PyCode_Check(called_func_cod));
+    FuncMemoInfo* called_func_memo_info =
+      get_func_memo_info_from_cod((PyCodeObject*)called_func_cod);
 
-    while (PyDict_Next(my_func_memo_info->code_dependencies,
-                       &pos, &called_func_name, &unused_junk)) {
-      PyObject* called_func_cod = PyDict_GetItem(func_name_to_code_object, called_func_name);
-      assert(PyCode_Check(called_func_cod));
-      FuncMemoInfo* called_func_memo_info =
-        get_func_memo_info_from_cod((PyCodeObject*)called_func_cod);
+    assert(called_func_memo_info);
 
-      assert(called_func_memo_info);
+    // don't recurse on a function that we've already checked, or else
+    // you will infinite loop:
+    if (my_func_memo_info->last_dep_check_instr_time == 
+        called_func_memo_info->last_dep_check_instr_time) {
+      continue;
+    }
 
-      // don't recurse on YOURSELF since that will lead to an infinite loop
-      if (called_func_memo_info == my_func_memo_info) {
-        continue;
-      }
-
-      if (!are_dependencies_satisfied(called_func_memo_info, cur_frame)) {
-        all_child_dependencies_satisfied = 0;
-        break;
-      }
+    if (!are_dependencies_satisfied(called_func_memo_info, cur_frame)) {
+      all_child_dependencies_satisfied = 0;
+      break;
     }
   }
 
@@ -1014,17 +1010,19 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     // caller_func_memo_info doesn't exist for top-level modules:
     if (caller_func_memo_info) {
       PyObject* caller_code_deps = caller_func_memo_info->code_dependencies;
+      assert(caller_code_deps);
+
       // Optimizaton: avoid adding duplicates (there will be MANY duplicates 
       // throughout a long-running script with lots of function calls)
-      if (caller_code_deps && !PyDict_Contains(caller_code_deps, co->pg_canonical_name)) {
+      if (!PyDict_Contains(caller_code_deps, co->pg_canonical_name)) {
         // add a code dependency in your caller to the most up-to-date
         // code for THIS function (not a previously-saved version of the
         // code, since later we might discover it to be outdated!)
         PyObject* my_self_code_dependency = 
           PyDict_GetItem(func_name_to_code_dependency, co->pg_canonical_name);
+        assert(my_self_code_dependency);
 
-        if (my_self_code_dependency)
-          PyDict_SetItem(caller_code_deps, co->pg_canonical_name, my_self_code_dependency);
+        PyDict_SetItem(caller_code_deps, co->pg_canonical_name, my_self_code_dependency);
       }
     }
   }
@@ -1149,7 +1147,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     // and return the copy to the caller.  See this test for why
     // we need to return a copy:
     //
-    //   incpy/incpy-tests/small-tests/cow_func_retval/
+    //   IncPy-regression-tests/cow_func_retval/
 #ifdef ENABLE_COW
     // defer the deepcopy until elt has been mutated
     memoized_retval_copy = memoized_retval;
@@ -1174,7 +1172,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     // if found, print memoized buffers to stdout/stderr
     // and also append them to the buffers of all of your callers
     // so that if they are later skipped, then they can properly replay
-    // your buffers (see incpy-tests/small-tests/stdout_nested_2/)
+    // your buffers (see IncPy-regression-tests/stdout_nested_2/)
     if (memoized_stdout_buf) {
       PyObject* outf = PySys_GetObject("stdout");
       PyFile_WriteString(PyString_AsString(memoized_stdout_buf), outf);
