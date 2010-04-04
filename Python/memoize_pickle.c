@@ -97,9 +97,8 @@ static int _is_picklable_FAST_BUT_UNSOUND(PyObject* obj, int depth_level) {
     else {
       Py_ssize_t pos = 0;
       PyObject* child;
-      long hash;
       // just grab the 'first' element and then break
-      while (_PySet_NextEntry(obj, &pos, &child, &hash)) {
+      while (_PySet_Next(obj, &pos, &child)) {
         return _is_picklable_FAST_BUT_UNSOUND(child,
                                               depth_level + 1);
       }

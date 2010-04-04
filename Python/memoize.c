@@ -1219,8 +1219,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   if (f->globals_read_set) {
     Py_ssize_t pos = 0;
     PyObject* global_varname_tuple;
-    long hash;
-    while (_PySet_NextEntry(f->globals_read_set, &pos, &global_varname_tuple, &hash)) {
+    while (_PySet_Next(f->globals_read_set, &pos, &global_varname_tuple)) {
       PyObject* val = find_globally_reachable_obj_by_name(global_varname_tuple, f);
 
       if (val) {
@@ -1265,8 +1264,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     // were these writes self-contained?
     Py_ssize_t s_pos = 0;
     PyObject* written_filename;
-    long s_hash;
-    while (_PySet_NextEntry(f->files_written_set, &s_pos, &written_filename, &s_hash)) {
+    while (_PySet_Next(f->files_written_set, &s_pos, &written_filename)) {
       if (!(f->files_opened_w_set && 
             PySet_Contains(f->files_opened_w_set, written_filename) &&
             f->files_closed_set &&
@@ -1395,8 +1393,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
     Py_ssize_t s_pos = 0;
     PyObject* written_filename;
-    long s_hash;
-    while (_PySet_NextEntry(f->files_written_set, &s_pos, &written_filename, &s_hash)) {
+    while (_PySet_Next(f->files_written_set, &s_pos, &written_filename)) {
       char* filename_cstr = PyString_AsString(written_filename);
       FILE* fp = fopen(filename_cstr, "r");
       time_t mtime = PyOS_GetLastModificationTime(filename_cstr, fp);

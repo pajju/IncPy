@@ -298,8 +298,7 @@ int contains_externally_aliased_mutable_obj(PyObject* obj, PyFrameObject* f) {
   else if (PySet_Check(obj)) {
     Py_ssize_t pos = 0;
     PyObject* child;
-    long hash;
-    while (_PySet_NextEntry(obj, &pos, &child, &hash)) {
+    while (_PySet_Next(obj, &pos, &child)) {
       int sub_res = contains_externally_aliased_mutable_obj(child, f);
       if (sub_res) return 1;
     }
