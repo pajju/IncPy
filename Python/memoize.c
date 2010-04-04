@@ -22,6 +22,7 @@
 #include "import.h"
 
 #include <time.h>
+#include <sys/stat.h>
 #include <string.h>
 
 
@@ -627,7 +628,7 @@ void pg_initialize() {
 
 
   // this file should be small, so start-up time should be fast!
-  PyObject* pf = PyFile_FromString("filenames.pickle", "r");
+  PyObject* pf = PyFile_FromString("incpy-cache/filenames.pickle", "r");
   if (pf) {
     PyObject* tup = PyTuple_Pack(1, pf);
     pickle_filenames = PyObject_Call(cPickle_load_func, tup, NULL);
@@ -660,6 +661,12 @@ void pg_finalize() {
 
   PyObject* tup;
 
+  struct stat st;
+  // create incpy-cache/ sub-directory if it doesn't already exist
+  if (stat("incpy-cache", &st) != 0) {
+    mkdir("incpy-cache", 0777);
+  }
+
   // serialize and pickle func_memo_info entries to disk
   PyObject* canonical_name = NULL;
   PyObject* fmi_addr = NULL;
@@ -683,7 +690,7 @@ void pg_finalize() {
 
       // append '.pickle' to get the output filename for this func_memo_info
       char* hexdigest_str = PyString_AsString(hexdigest);
-      PyObject* out_fn = PyString_FromFormat("%s.pickle", 
+      PyObject* out_fn = PyString_FromFormat("incpy-cache/%s.pickle",
                                              hexdigest_str);
 
       Py_DECREF(hexdigest);
@@ -710,7 +717,7 @@ void pg_finalize() {
 
 
   // write out filenames.pickle to disk
-  PyObject* pf = PyFile_FromString("filenames.pickle", "w");
+  PyObject* pf = PyFile_FromString("incpy-cache/filenames.pickle", "w");
   assert(pf);
   tup = PyTuple_Pack(2, pickle_filenames, pf);
   PyObject* filenames_dump_res = PyObject_Call(cPickle_dump_func, tup, NULL);
