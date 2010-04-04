@@ -575,6 +575,9 @@ list_clear(PyListObject *a)
 {
 	Py_ssize_t i;
 	PyObject **item = a->ob_item;
+
+  pg_about_to_MUTATE_event(a); // pgbovine
+
 	if (item != NULL) {
 		/* Because XDECREF can recursively invoke operations on
 		   this list, we make it empty first. */

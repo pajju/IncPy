@@ -1232,6 +1232,9 @@ set_ior(PySetObject *so, PyObject *other)
 		Py_INCREF(Py_NotImplemented);
 		return Py_NotImplemented;
 	}
+
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	if (set_update_internal(so, other) == -1)
 		return NULL;
 	Py_INCREF(so);
@@ -1399,6 +1402,9 @@ set_iand(PySetObject *so, PyObject *other)
 		Py_INCREF(Py_NotImplemented);
 		return Py_NotImplemented;
 	}
+
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	result = set_intersection_update(so, other);
 	if (result == NULL)
 		return NULL;
@@ -1626,6 +1632,9 @@ set_isub(PySetObject *so, PyObject *other)
 		Py_INCREF(Py_NotImplemented);
 		return Py_NotImplemented;
 	}
+
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	if (set_difference_update_internal(so, other) == -1)
 		return NULL;
 	Py_INCREF(so);
@@ -1734,6 +1743,9 @@ set_ixor(PySetObject *so, PyObject *other)
 		Py_INCREF(Py_NotImplemented);
 		return Py_NotImplemented;
 	}
+
+  pg_about_to_MUTATE_event(so); // pgbovine
+
 	result = set_symmetric_difference_update(so, other);
 	if (result == NULL)
 		return NULL;

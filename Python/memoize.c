@@ -1751,6 +1751,7 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
     list.remove()
     list.reverse()
     list.sort()
+    list.clear()
 
     dict.pop()
     dict.popitem()
@@ -1766,6 +1767,10 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
     set.discard()
     set.pop()
     set.clear()
+    set_isub (-=)
+    set_iand (&=)
+    set_ixor (^=)
+    set_ior  (|=)
 
  */
 void pg_about_to_MUTATE_event(PyObject *object) {
