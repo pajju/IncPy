@@ -29,6 +29,7 @@ typedef struct {
   //   "args" --> argument list
   //   "retval" --> return value, stored in a SINGLETON list
   //                (to facilitate mutation for COW optimization)
+  //   "runtime_ms" --> how many milliseconds it took to run
   //   "stdout_buf" --> buffered stdout string (OPTIONAL!)
   //   "stderr_buf" --> buffered stderr string (OPTIONAL!)
   PyObject* memoized_vals;            // List

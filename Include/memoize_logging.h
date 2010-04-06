@@ -16,17 +16,17 @@ extern "C" {
 #endif
 
 
-// comment-out to eliminate logging overhead (which isn't that big,
-// according to some cursory measurements)
-#define ENABLE_LOGGING
+#if defined(Py_DEBUG)
+  #define ENABLE_DEBUG_LOGGING
+#endif // Py_DEBUG
 
 
-#ifdef ENABLE_LOGGING
-  #define PG_LOG(str) fprintf(log_file, "%s\n", str);
-  #define PG_LOG_PRINTF(...) fprintf (log_file, __VA_ARGS__)
+#ifdef ENABLE_DEBUG_LOGGING
+  #define PG_LOG(str) fprintf(debug_log_file, "%s\n", str)
+  #define PG_LOG_PRINTF(...) fprintf (debug_log_file, __VA_ARGS__)
 
 // initialize in pg_initialize(), destroy in pg_finalize()
-FILE* log_file;
+FILE* debug_log_file;
 
 #else
   #define PG_LOG(str)

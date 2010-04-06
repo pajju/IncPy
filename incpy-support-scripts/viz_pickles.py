@@ -1,6 +1,6 @@
 # visualize pickles produced by IncPy
 
-# pass in directory with pickle files as argv[1]
+# pass in a directory (argv[1]) that contains an incpy-cache/ sub-directory
 
 import os, sys, re
 import cPickle
@@ -25,7 +25,7 @@ def render_func_memo_info(fmi):
         retval = e['retval']
         assert len(retval) == 1 # retval is formatted as a singleton list
         retval = retval[0]
-        print ' ', e['args'], '->', retval
+        print ' ', e['args'], '->', retval,' (', e['runtime_ms'], 'ms )'
         if 'stdout_buf' in e:
           print '  stdout_buf:', repr(e['stdout_buf'])
         if 'stderr_buf' in e:
@@ -78,8 +78,8 @@ def render_func_memo_info(fmi):
 def main(argv=None):
   if not argv: argv = sys.argv
   dirname = argv[1]
-  filenames_file = os.path.join(dirname, 'filenames.pickle')
-  assert os.path.isfile(filenames_file)
+  filenames_file = os.path.join(dirname, 'incpy-cache/filenames.pickle')
+  assert os.path.isfile(filenames_file), filenames_file
   filenames_dict = cPickle.load(open(filenames_file))
   func_names = sorted(filenames_dict.keys())
   for func in func_names:
