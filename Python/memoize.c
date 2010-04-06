@@ -565,6 +565,8 @@ void pg_initialize() {
   user_log_file = fopen(PyString_AsString(incpy_log_path), "a");
 
   Py_DECREF(incpy_log_path);
+  Py_DECREF(tmp_tup);
+  Py_DECREF(tmp_str);
   Py_DECREF(homedir);
 
   // parse incpy.config to look for lines of the following form:
@@ -675,7 +677,16 @@ void pg_initialize() {
   struct tm* tmp_tm = localtime(&t);
   strftime(time_buf, 100, "%Y-%m-%d %T", tmp_tm);
 
-  USER_LOG_PRINTF("=== BEGIN %s ===\n", time_buf);
+
+  assert(ignore_paths_lst);
+  if (PyList_Size(ignore_paths_lst) > 0) {
+    PyObject* tmp_str = PyObject_Repr(ignore_paths_lst);
+    USER_LOG_PRINTF("=== START %s | IGNORE %s ===\n", time_buf, PyString_AsString(tmp_str));
+    Py_DECREF(tmp_str);
+  }
+  else {
+    USER_LOG_PRINTF("=== START %s ===\n", time_buf);
+  }
 
   pg_activated = 1;
 }
@@ -834,6 +845,11 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
 
   Py_ssize_t pos; // must reset on every iterator call, or else does the wrong thing
 
+  // the function for which we're checking dependencies (note that it
+  // could DIFFER from my_func_memo_info since this function can be
+  // called recursively):
+  char* cur_func_name_str = PyString_AsString(GET_CANONICAL_NAME(cur_frame->func_memo_info));
+
   // Code dependencies:
 
   // you must at least have a code dependency on YOURSELF
@@ -854,20 +870,22 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
                        &pos, &dependent_func_canonical_name, &memoized_code_dependency)) {
       PyObject* cur_code_dependency = 
         PyDict_GetItem(func_name_to_code_dependency, dependent_func_canonical_name);
+
+      char* dependent_func_name_str = PyString_AsString(dependent_func_canonical_name);
       // if the function is NOT FOUND or its code has changed, then
       // that code dependency is definitely broken
       if (!cur_code_dependency) {
         PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_NOT_FOUND', what='%s')\n",
-                      PyString_AsString(dependent_func_canonical_name));
-        USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN | %s not found\n",
-                        PyString_AsString(dependent_func_canonical_name));
+                      dependent_func_name_str);
+        USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s not found\n",
+                        cur_func_name_str, dependent_func_name_str);
         return 0;
       }
       else if (!code_dependency_EQ(cur_code_dependency, memoized_code_dependency)) {
         PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_CHANGED', what='%s')\n",
-                      PyString_AsString(dependent_func_canonical_name));
-        USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN | %s changed\n",
-                        PyString_AsString(dependent_func_canonical_name));
+                      dependent_func_name_str);
+        USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s changed\n",
+                        cur_func_name_str, dependent_func_name_str);
         return 0;
       }
     }
@@ -891,8 +909,11 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
       if (!cur_value) {
         // we can't even find the global object, then PUNT!
         PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
-        PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_NOT_FOUND', varname='%s')\n", PyString_AsString(tmp_str));
-        USER_LOG_PRINTF("GLOBAL_VAR_DEPENDENCY_BROKEN | %s not found\n", PyString_AsString(tmp_str));
+        char* varname_str = PyString_AsString(tmp_str);
+        PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_NOT_FOUND', varname='%s')\n",
+                      varname_str);
+        USER_LOG_PRINTF("GLOBAL_VAR_DEPENDENCY_BROKEN %s | %s not found\n",
+                        cur_func_name_str, varname_str);
         Py_DECREF(tmp_str);
         return 0;
       }
@@ -901,10 +922,11 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
         // especially when your function has a large global variable dependency
         if (!obj_equals(memoized_value, cur_value)) {
           PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
+          char* varname_str = PyString_AsString(tmp_str);
           PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_CHANGED', varname='%s')\n",
-                        PyString_AsString(tmp_str));
-          USER_LOG_PRINTF("GLOBAL_VAR_DEPENDENCY_BROKEN | %s changed\n",
-                          PyString_AsString(tmp_str));
+                        varname_str);
+          USER_LOG_PRINTF("GLOBAL_VAR_DEPENDENCY_BROKEN %s | %s changed\n",
+                          cur_func_name_str, varname_str);
           Py_DECREF(tmp_str);
 
           return 0;
@@ -961,8 +983,8 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
         if (mtime != saved_modtime) {
           PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
                         dependent_filename_str);
-          USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN | %s changed\n", 
-                          dependent_filename_str);
+          USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s changed\n",
+                          cur_func_name_str, dependent_filename_str);
           return 0;
         }
       }
@@ -971,8 +993,8 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
         PyErr_Clear();
         PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
                       dependent_filename_str);
-        USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN | %s not found\n", 
-                        dependent_filename_str);
+        USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s not found\n",
+                        cur_func_name_str, dependent_filename_str);
         return 0;
       }
     }
@@ -997,8 +1019,8 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
         if (mtime != saved_modtime) {
           PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
                         dependent_filename_str);
-          USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN | %s changed\n",
-                          dependent_filename_str);
+          USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s changed\n",
+                          cur_func_name_str, dependent_filename_str);
           return 0;
         }
       }
@@ -1007,8 +1029,8 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
         PyErr_Clear();
         PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
                       dependent_filename_str);
-        USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN | %s not found\n",
-                        dependent_filename_str);
+        USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s not found\n",
+                        cur_func_name_str, dependent_filename_str);
         return 0;
       }
     }
@@ -1114,7 +1136,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   // check that all dependencies are satisfied ...
   if (!are_dependencies_satisfied(f->func_memo_info, f)) {
     clear_cache_and_mark_pure(f->func_memo_info);
-    USER_LOG_PRINTF("CLEAR CACHE %s\n", PyString_AsString(co->pg_canonical_name));
+    USER_LOG_PRINTF("CLEAR_CACHE %s\n", PyString_AsString(co->pg_canonical_name));
     goto pg_enter_frame_done;
   }
 
