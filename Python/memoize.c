@@ -901,7 +901,7 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
         // especially when your function has a large global variable dependency
         if (!obj_equals(memoized_value, cur_value)) {
           PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
-          PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_CHANGED', varname='%s')",
+          PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_CHANGED', varname='%s')\n",
                         PyString_AsString(tmp_str));
           USER_LOG_PRINTF("GLOBAL_VAR_DEPENDENCY_BROKEN | %s changed\n",
                           PyString_AsString(tmp_str));
