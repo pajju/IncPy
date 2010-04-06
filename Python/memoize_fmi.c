@@ -138,6 +138,8 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
       PyErr_Print();
       PG_LOG_PRINTF("dict(event='ERROR', why='PICKLE_FILE_NOT_FOUND', what='%s')\n",
                     PyString_AsString(cod->pg_canonical_name));
+      fprintf(stderr, "ERROR: cache file %s not found",
+              PyString_AsString(pickle_filename));
       exit(1);
     }
   }

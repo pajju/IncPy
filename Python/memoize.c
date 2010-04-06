@@ -113,7 +113,7 @@ FILE* debug_log_file = NULL;
 static FILE* user_log_file = NULL;
 
 #define USER_LOG(str) fprintf(user_log_file, "%s\n", str)
-#define USER_LOG_PRINTF(...) fprintf(user_log_file, __VA_ARGS__)
+#define USER_LOG_PRINTF(...) do {fprintf(user_log_file, __VA_ARGS__); fsync(fileno(user_log_file));} while(0)
 
 
 // References to Python standard library functions:
@@ -575,8 +575,8 @@ void pg_initialize() {
 
   PyObject* config_file = PyFile_FromString(PyString_AsString(incpy_config_path), "r");
   if (!config_file) {
-    printf("Error: IncPy config file not found.\nPlease create a proper config file here: %s\n",
-           PyString_AsString(incpy_config_path));
+    fprintf(stderr, "ERROR: IncPy config file not found.\n       Please create a proper config file here: %s\n",
+            PyString_AsString(incpy_config_path));
     exit(1);
   }
 
@@ -614,8 +614,8 @@ void pg_initialize() {
         Py_DECREF(exists_func);
 
         if (!PyObject_IsTrue(path_exists_bool)) {
-          printf("Error: The ignore path %s\n       specified in incpy.config does not exist\n",
-                 PyString_AsString(ignore_abspath));
+          fprintf(stderr, "ERROR: The ignore path %s\n       specified in incpy.config does not exist\n",
+                  PyString_AsString(ignore_abspath));
           exit(1);
         }
 
@@ -1321,7 +1321,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     PG_LOG_PRINTF("dict(event='SKIP_CALL', what='%s', memo_lookup_time_ms='%ld')\n",
                   PyString_AsString(co->pg_canonical_name),
                   memo_lookup_time_ms);
-    USER_LOG_PRINTF("SKIPPED %s | lookup time %ldms | original runtime %ldms\n",
+    USER_LOG_PRINTF("SKIPPED %s | lookup time %ld ms | original runtime %ld ms\n",
                     PyString_AsString(co->pg_canonical_name),
                     memo_lookup_time_ms,
                     memoized_runtime_ms);
@@ -1703,7 +1703,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     PG_LOG_PRINTF("dict(event='MEMOIZED_RESULTS', what='%s', runtime_ms='%ld')\n",
                   PyString_AsString(canonical_name),
                   runtime_ms);
-    USER_LOG_PRINTF("MEMOIZED %s | runtime %ldms\n",
+    USER_LOG_PRINTF("MEMOIZED %s | runtime %ld ms\n",
                     PyString_AsString(canonical_name),
                     runtime_ms);
   }
