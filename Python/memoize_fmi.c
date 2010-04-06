@@ -140,7 +140,7 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
                     PyString_AsString(cod->pg_canonical_name));
       fprintf(stderr, "ERROR: cache file %s not found",
               PyString_AsString(pickle_filename));
-      exit(1);
+      Py_Exit(1);
     }
   }
 

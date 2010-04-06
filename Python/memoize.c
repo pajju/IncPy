@@ -215,7 +215,7 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
       // TODO: what's the best way to end execution when we encounter
       // an unrecoverable exception?
       PyErr_Print();
-      exit(1);
+      Py_Exit(1);
     }
   }
   return (cmp_result == 0); // 0 means EQUALS
@@ -577,7 +577,7 @@ void pg_initialize() {
   if (!config_file) {
     fprintf(stderr, "ERROR: IncPy config file not found.\n       Please create a proper config file here: %s\n",
             PyString_AsString(incpy_config_path));
-    exit(1);
+    Py_Exit(1);
   }
 
   PyObject* readlines_func = PyObject_GetAttrString(config_file, "readlines");
@@ -616,7 +616,7 @@ void pg_initialize() {
         if (!PyObject_IsTrue(path_exists_bool)) {
           fprintf(stderr, "ERROR: The ignore path %s\n       specified in incpy.config does not exist\n",
                   PyString_AsString(ignore_abspath));
-          exit(1);
+          Py_Exit(1);
         }
 
         PyList_Append(ignore_paths_lst, ignore_abspath);
@@ -1267,7 +1267,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
       // we can't keep going, since memoized_retval_copy is NULL
       // TODO: deal with this gracefully in the future rather than failing hard ...
       PyErr_Print();
-      exit(1);
+      Py_Exit(1);
     }
 #endif // ENABLE_COW
 
