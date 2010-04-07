@@ -131,8 +131,8 @@ static PyObject* abspath_func = NULL; // os.path.abspath
 
 
 // forward declarations:
-static void mark_impure(PyFrameObject* f);
-static void mark_entire_stack_impure(void);
+static void mark_impure(PyFrameObject* f, char* why);
+static void mark_entire_stack_impure(char* why);
 static void copy_and_add_global_var_dependency(PyObject* varname,
                                                PyObject* value,
                                                FuncMemoInfo* func_memo_info);
@@ -222,19 +222,40 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
 }
 
 
-// returns 1 if s appears as a PREFIX of some element in ignore_paths_lst
-static int prefix_in_ignore_paths_lst(char* s) {
+// returns 1 if the absolute path represented by the PyString s
+// appears as a PREFIX of some element in ignore_paths_lst
+static int prefix_in_ignore_paths_lst(PyObject* s) {
+  PyObject* path = NULL;
+
+  // convert s to an ABSOLUTE PATH if possible
+  // (otherwise, just use s as-is)
+  if (abspath_func) {
+    PyObject* tmp_tup = PyTuple_Pack(1, s);
+    path = PyObject_Call(abspath_func, tmp_tup, NULL);
+    Py_DECREF(tmp_tup);
+  }
+  else {
+    path = s;
+    Py_INCREF(s);
+  }
+
+  assert(path);
   assert(ignore_paths_lst);
+
+  char* path_str = PyString_AsString(path);
+
   Py_ssize_t i;
   for (i = 0; i < PyList_Size(ignore_paths_lst); i++) {
     PyObject* elt = PyList_GET_ITEM(ignore_paths_lst, i);
-    char* path_str = PyString_AsString(elt);
+    char* path_prefix = PyString_AsString(elt);
     // we're doing a prefix match, so remember to use strncmp
-    if (strncmp(s, path_str, strlen(path_str)) == 0) {
+    if (strncmp(path_str, path_prefix, strlen(path_prefix)) == 0) {
+      Py_DECREF(path);
       return 1;
     }
   }
 
+  Py_DECREF(path);
   return 0;
 }
 
@@ -270,7 +291,7 @@ int pg_ignore_code(PyCodeObject* co) {
 
   // 4. ignore code from files whose paths start with some element of
   //    ignore_paths_lst
-  if (prefix_in_ignore_paths_lst(PyString_AsString(co->co_filename))) {
+  if (prefix_in_ignore_paths_lst(co->co_filename)) {
     return 1;
   }
 
@@ -460,25 +481,28 @@ void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict) {
 }
 
 
-static void mark_impure(PyFrameObject* f) {
+static void mark_impure(PyFrameObject* f, char* why) {
   if (!f->func_memo_info) return;
 
-  // don't double-mark or double-log ...
+  // don't log more than once per function
   if (f->func_memo_info->is_impure) {
     return;
   }
 
-  // note that we only log when a function is made impure JUST ONCE
-  PG_LOG_PRINTF("dict(event='MARK_IMPURE', what='%s')\n",
-                PyString_AsString(f->f_code->pg_canonical_name));
+  // only print log message for functions we're not ignoring:
+  if (!f->f_code->pg_ignore) {
+    char* name_str = PyString_AsString(f->f_code->pg_canonical_name);
+    PG_LOG_PRINTF("dict(event='MARK_IMPURE', what='%s', why='%s')\n", name_str, why);
+    USER_LOG_PRINTF("MARK_IMPURE %s | %s\n", name_str, why);
+  }
 
   f->func_memo_info->is_impure = 1;
 }
 
-static void mark_entire_stack_impure(void) {
+static void mark_entire_stack_impure(char* why) {
   PyFrameObject* f = top_frame;
   while (f) {
-    mark_impure(f);
+    mark_impure(f, why);
     f = f->f_back;
   }
 }
@@ -619,7 +643,25 @@ void pg_initialize() {
           Py_Exit(1);
         }
 
+        // SUBTLE!  if it's a directory, then add a trailing '/' so that
+        // when we do a prefix match later with filenames, we don't get 
+        // spurious matches with directory names that have this
+        // directory as a prefix
+        PyObject* isdir_func = PyObject_GetAttrString(path_module, "isdir");
+        tmp_tup = PyTuple_Pack(1, ignore_abspath);
+        PyObject* path_isdir_bool = PyObject_Call(isdir_func, tmp_tup, NULL);
+        Py_DECREF(tmp_tup);
+        Py_DECREF(isdir_func);
+
+        if (PyObject_IsTrue(path_isdir_bool)) {
+          PyObject* slash = PyString_FromString("/");
+          PyString_Concat(&ignore_abspath, slash);
+          Py_DECREF(slash);
+        }
+
         PyList_Append(ignore_paths_lst, ignore_abspath);
+
+        Py_DECREF(path_isdir_bool);
         Py_DECREF(path_exists_bool);
         Py_DECREF(ignore_abspath);
       }
@@ -681,11 +723,11 @@ void pg_initialize() {
   assert(ignore_paths_lst);
   if (PyList_Size(ignore_paths_lst) > 0) {
     PyObject* tmp_str = PyObject_Repr(ignore_paths_lst);
-    USER_LOG_PRINTF("=== START %s | IGNORE %s ===\n", time_buf, PyString_AsString(tmp_str));
+    USER_LOG_PRINTF("=== %s START | IGNORE %s\n", time_buf, PyString_AsString(tmp_str));
     Py_DECREF(tmp_str);
   }
   else {
-    USER_LOG_PRINTF("=== START %s ===\n", time_buf);
+    USER_LOG_PRINTF("=== %s START\n", time_buf);
   }
 
   pg_activated = 1;
@@ -813,7 +855,7 @@ void pg_finalize() {
   struct tm* tmp_tm = localtime(&t);
   strftime(time_buf, 100, "%Y-%m-%d %T", tmp_tm);
 
-  USER_LOG_PRINTF("=== END %s ===\n", time_buf);
+  USER_LOG_PRINTF("=== %s END\n\n", time_buf);
 
   fclose(user_log_file);
   user_log_file = NULL;
@@ -1865,9 +1907,9 @@ void pg_STORE_DEL_GLOBAL_event(PyObject *varname) {
 
   /* mark all functions currently on stack as impure, since they are
      all executing at the time that a global write occurs */
-  PG_LOG_PRINTF("dict(event='SET_GLOBAL_VAR', what='%s')\n", 
+  PG_LOG_PRINTF("dict(event='SET_GLOBAL_VAR', what='%s')\n",
                 PyString_AsString(varname));
-  mark_entire_stack_impure();
+  mark_entire_stack_impure("mutate global");
 
   MEMOIZE_PUBLIC_END()
 }
@@ -2009,12 +2051,12 @@ void pg_about_to_MUTATE_event(PyObject *object) {
     assert(global_container && PyTuple_CheckExact(global_container));
     PyObject* filename = PyTuple_GET_ITEM(global_container, 0);
     assert(filename);
-    if (prefix_in_ignore_paths_lst(PyString_AsString(filename))) {
+    if (prefix_in_ignore_paths_lst(filename)) {
       MEMOIZE_PUBLIC_END()
       return;
     }
 
-    mark_entire_stack_impure();
+    mark_entire_stack_impure("mutate global");
   }
   else {
     // then fall back on the more general check, which picks up
@@ -2026,7 +2068,7 @@ void pg_about_to_MUTATE_event(PyObject *object) {
     while (f) {
       if (f->func_memo_info) {
         if (Py_CREATION_TIME(object) < f->start_instr_time) {
-          mark_impure(f);
+          mark_impure(f, "mutate non-local value");
         }
         else {
           // small optimization: since we are going 'backwards' up the
@@ -2098,7 +2140,7 @@ void pg_FILE_OPEN_event(PyFileObject* fobj) {
     PG_LOG_PRINTF("dict(event='OPEN_FILE_IN_MIXED_WRITE_MODE', what='%s', mode='%s')\n", 
                   PyString_AsString(fobj->f_name), mode);
 
-    mark_entire_stack_impure();
+    mark_entire_stack_impure("opened file in a/+ mode");
   }
   else if (is_pure_write) {
     // add to files_opened_w_set AND files_written_set of all frames on the stack
