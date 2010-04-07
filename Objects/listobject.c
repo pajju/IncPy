@@ -575,6 +575,7 @@ list_clear(PyListObject *a)
 {
 	Py_ssize_t i;
 	PyObject **item = a->ob_item;
+
 	if (item != NULL) {
 		/* Because XDECREF can recursively invoke operations on
 		   this list, we make it empty first. */
@@ -719,6 +720,8 @@ list_inplace_repeat(PyListObject *self, Py_ssize_t n)
 		Py_INCREF(self);
 		return (PyObject *)self;
 	}
+
+  pg_about_to_MUTATE_event(self); // pgbovine
 
 	if (n < 1) {
 		(void)list_clear(self);

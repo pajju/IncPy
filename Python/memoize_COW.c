@@ -108,8 +108,7 @@ static void add_all_contained_mutable_object_addrs(PyObject* obj,
   else if (PySet_Check(obj)) {
     Py_ssize_t pos = 0;
     PyObject* child;
-    long hash;
-    while (_PySet_NextEntry(obj, &pos, &child, &hash)) {
+    while (_PySet_Next(obj, &pos, &child)) {
       add_all_contained_mutable_object_addrs(child, contained_addrs_set);
     }
   }
@@ -326,8 +325,7 @@ void check_COW_mutation(PyObject* obj) {
   if (PySet_Size(elts_to_remove) > 0) {
     Py_ssize_t pos = 0;
     PyObject* base_obj_addr_to_remove;
-    long hash;
-    while (_PySet_NextEntry(elts_to_remove, &pos, &base_obj_addr_to_remove, &hash)) {
+    while (_PySet_Next(elts_to_remove, &pos, &base_obj_addr_to_remove)) {
       PyDict_DelItem(cow_containment_dict, base_obj_addr_to_remove);
     }
   }
