@@ -434,6 +434,11 @@ void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict) {
       PyFunctionObject* f = (PyFunctionObject*)val;
       PyCodeObject* cod = (PyCodeObject*)f->func_code;
 
+      // don't bother doing this for ignored code
+      if (cod->pg_ignore) {
+        continue;
+      }
+
       assert(cod->pg_canonical_name);
 
       // THIS IS REALLY SUBTLE BUT IMPORTANT ... by this point, there
