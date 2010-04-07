@@ -122,10 +122,8 @@ static FILE* user_log_file = NULL;
 
 #define USER_LOG_PRINTF(...) \
   do { \
-    fprintf(user_aggregate_log_file, __VA_ARGS__); \
-    fsync(fileno(user_aggregate_log_file)); \
     fprintf(user_log_file, __VA_ARGS__); \
-    fsync(fileno(user_log_file)); \
+    fprintf(user_aggregate_log_file, __VA_ARGS__); \
 } while(0)
 
 
