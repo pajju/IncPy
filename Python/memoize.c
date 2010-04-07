@@ -108,12 +108,25 @@ FILE* debug_log_file = NULL;
    low-traffic and report only important events relating to memoization
 
    It's initialized in pg_initialize() to open a file called
-   $HOME/incpy.log (in the user's home directory)
+   $HOME/incpy.aggregate.log (in the user's home directory)
+*/
+static FILE* user_aggregate_log_file = NULL;
+
+/* same as user_log_file, except that it's write-only and only keeps the
+   log for the most recent execution
+
+   It's initialized in pg_initialize() to open a file called incpy.log
+
 */
 static FILE* user_log_file = NULL;
 
-#define USER_LOG(str) fprintf(user_log_file, "%s\n", str)
-#define USER_LOG_PRINTF(...) do {fprintf(user_log_file, __VA_ARGS__); fsync(fileno(user_log_file));} while(0)
+#define USER_LOG_PRINTF(...) \
+  do { \
+    fprintf(user_aggregate_log_file, __VA_ARGS__); \
+    fsync(fileno(user_aggregate_log_file)); \
+    fprintf(user_log_file, __VA_ARGS__); \
+    fsync(fileno(user_log_file)); \
+} while(0)
 
 
 // References to Python standard library functions:
@@ -580,13 +593,15 @@ void pg_initialize() {
   Py_DECREF(tmp_tup);
   Py_DECREF(tmp_str);
 
-  tmp_str = PyString_FromString("incpy.log");
+  tmp_str = PyString_FromString("incpy.aggregate.log");
   tmp_tup = PyTuple_Pack(2, homedir, tmp_str);
   PyObject* incpy_log_path = PyObject_Call(join_func, tmp_tup, NULL);
   assert(incpy_log_path);
 
-  // Also open $HOME/incpy.log (in append mode) while you're at it:
-  user_log_file = fopen(PyString_AsString(incpy_log_path), "a");
+  // Also open $HOME/incpy.aggregate.log (in append mode) while you're at it:
+  user_aggregate_log_file = fopen(PyString_AsString(incpy_log_path), "a");
+
+  user_log_file = fopen("incpy.log", "w");
 
   Py_DECREF(incpy_log_path);
   Py_DECREF(tmp_tup);
@@ -856,6 +871,9 @@ void pg_finalize() {
   strftime(time_buf, 100, "%Y-%m-%d %T", tmp_tm);
 
   USER_LOG_PRINTF("=== %s END\n\n", time_buf);
+
+  fclose(user_aggregate_log_file);
+  user_aggregate_log_file = NULL;
 
   fclose(user_log_file);
   user_log_file = NULL;
