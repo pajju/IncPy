@@ -550,6 +550,16 @@ void pg_initialize() {
   assert(deepcopy_func);
 
   PyObject* cPickle_module = PyImport_ImportModule("cPickle"); // increments refcount
+
+  // this is the first C extension module we're trying to import, so do
+  // a check to make sure it exists, and if not, simply punt on
+  // initialization altogether.  This will ensure that IncPy can compile
+  // after a 'make clean' (since cPickle doesn't exist yet at that time)
+  if (!cPickle_module) {
+    fprintf(stderr, "WARNING: cPickle module doesn't yet exist, so IncPy features not activated.\n");
+    return;
+  }
+
   assert(cPickle_module);
   cPickle_dump_func = PyObject_GetAttrString(cPickle_module, "dump");
   cPickle_dumpstr_func = PyObject_GetAttrString(cPickle_module, "dumps");
