@@ -108,10 +108,9 @@ PyCode_New(int argcount, int nlocals, int stacksize, int flags,
 
     // pgbovine - NULL this out
     co->co_classname = NULL;
-    co->pg_canonical_name = pg_create_canonical_code_name(co); // pgbovine
     co->pg_func_memo_info = NULL; // pgbovine
-    co->pg_ignore = pg_ignore_code(co); // pgbovine
     co->pg_is_module = (strcmp(PyString_AsString(co->co_name), "<module>") == 0); // pgbovine
+    pg_init_canonical_name_and_ignore(co); // pgbovine
 	}
 
 	return co;

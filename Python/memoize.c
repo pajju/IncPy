@@ -272,44 +272,6 @@ static int prefix_in_ignore_paths_lst(PyObject* s) {
 }
 
 
-/* Return 1 if we want to ignore the code object given by co (which sets
-   its pg_ignore field to 1 from PyCode_New()), 0 otherwise.
- 
-   We do this at the time when a code object is created, so that we
-   don't have to do these checks every time a function is called. */
-int pg_ignore_code(PyCodeObject* co) {
-  // 0. ignore all code created before pg_initialize() has been called,
-  // since we don't have enough info to track those code objects anyways
-  if (!pg_activated) {
-    return 1;
-  }
-
-  // 1. do a SUPER cheap check for generators and ignore those
-  if (co->co_flags & CO_GENERATOR) {
-    return 1;
-  }
-
-  // 2. ignore lambda functions
-  if (strcmp(PyString_AsString(co->co_name), "<lambda>") == 0) {
-    return 1;
-  }
-
-  // 3. ignore code with untrackable filenames
-  if ((strcmp(PyString_AsString(co->co_filename), "<string>") == 0) ||
-      (strcmp(PyString_AsString(co->co_filename), "<stdin>") == 0) || 
-      (strcmp(PyString_AsString(co->co_filename), "???") == 0)) {
-    return 1;
-  }
-
-  // 4. ignore code from files whose paths start with some element of
-  //    ignore_paths_lst
-  if (prefix_in_ignore_paths_lst(co->co_filename)) {
-    return 1;
-  }
-
-  return 0;
-}
-
 /* Returns a newly-allocated PyString object that represents a canonical
    name for the given code object:
 
@@ -317,13 +279,9 @@ int pg_ignore_code(PyCodeObject* co) {
      "$classname::$function_name [$filename]" if it's a method
 
    To canonicalize file paths, we use os.path.abspath to grab the
-   ABSOLUTE PATH of the filename
-
-   For efficiency, we should only do this at the time when a code object
-   is created, which sets its pg_canonical_name field. */
-PyObject* pg_create_canonical_code_name(PyCodeObject* this_code) {
-  MEMOIZE_PUBLIC_START_RETNULL()
-
+   ABSOLUTE PATH of the filename.  If there is some error in creating
+   a canonical name, then return NULL. */
+static PyObject* create_canonical_code_name(PyCodeObject* this_code) {
   PyObject* classname = this_code->co_classname; // could be NULL
 
   PyObject* name = this_code->co_name;
@@ -335,6 +293,16 @@ PyObject* pg_create_canonical_code_name(PyCodeObject* this_code) {
   PyObject* tup = PyTuple_Pack(1, filename);
   PyObject* filename_abspath = PyObject_Call(abspath_func, tup, NULL);
   Py_DECREF(tup);
+
+  // this fails *mysteriously* in numpy when doing:
+  //
+  //  import numpy
+  //  numpy.random.mtrand.shuffle([1])
+  if (!filename_abspath) {
+    assert(PyErr_Occurred());
+    // trying to clear the error results in a segfault, this is WEIRD!
+    return NULL;
+  }
 
   assert(filename_abspath);
 
@@ -360,8 +328,49 @@ PyObject* pg_create_canonical_code_name(PyCodeObject* this_code) {
   assert(ret);
   Py_DECREF(filename_abspath);
 
-  MEMOIZE_PUBLIC_END()
   return ret;
+}
+
+// simultaneously initialize the pg_ignore and pg_canonical_name
+//
+// We do this at the time when a code object is created, so that we
+// don't have to do these checks every time a function is called.
+void pg_init_canonical_name_and_ignore(PyCodeObject* co) {
+  // set defaults ...
+  co->pg_ignore = 1; // ignore unless we have a good reason NOT to
+  co->pg_canonical_name = NULL;
+
+
+  // ... and only run this if we've been properly initialized
+  MEMOIZE_PUBLIC_START()
+
+  co->pg_canonical_name = create_canonical_code_name(co);
+
+
+  // ignore the following code:
+  //
+  //   0. ignore code that we can't even create a canonical name for
+  //      (presumably because create_canonical_code_name returned an error)
+  //   1. ignore generators
+  //   2. ignore lambda functions
+  //   3. ignore code with untrackable filenames
+  //   4. ignore code from files whose paths start with some element of
+  //      ignore_paths_lst
+  co->pg_ignore =
+    ((!co->pg_canonical_name) ||
+
+     (co->co_flags & CO_GENERATOR) ||
+
+     (strcmp(PyString_AsString(co->co_name), "<lambda>") == 0) ||
+
+     ((strcmp(PyString_AsString(co->co_filename), "<string>") == 0) ||
+      (strcmp(PyString_AsString(co->co_filename), "<stdin>") == 0) ||
+      (strcmp(PyString_AsString(co->co_filename), "???") == 0)) ||
+
+     (prefix_in_ignore_paths_lst(co->co_filename)));
+
+
+  MEMOIZE_PUBLIC_END()
 }
 
 // adds cod to func_name_to_code_dependency and func_name_to_code_object
@@ -481,12 +490,7 @@ void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict) {
       // also update pg_canonical_name to reflect new co_classname
       Py_CLEAR(cod->pg_canonical_name); // nullify old value
 
-      // TRICKY! Temporarily set pg_activated to 1 so that 
-      // pg_create_canonical_code_name will actually run instead
-      // of punting
-      pg_activated = 1;
-      cod->pg_canonical_name = pg_create_canonical_code_name(cod);
-      pg_activated = 0;
+      cod->pg_canonical_name = create_canonical_code_name(cod);
 
       // create a fresh new code_dependency object for the method
       // with its newly-set co_classname field

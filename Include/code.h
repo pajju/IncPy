@@ -28,7 +28,7 @@ typedef struct {
                                part of a method).  NOT INITIALIZED AT CREATION-TIME!
                                must be manually initialized later!!! */
     PyObject *pg_canonical_name; /* pgbovine - string that contains a combo of 
-                                               co_filename, co_name, and possibly co_classname */
+                                    co_filename, co_name, and possibly co_classname. */
     FuncMemoInfo* pg_func_memo_info; /* pgbovine - FuncMemoInfo associated with this code */
     char pg_ignore; /* pgbovine - non-zero if this code should be ignored - see Python/memoize.c */
     char pg_is_module; /* pgbovine - non-zero if this code's name is '<module>' */

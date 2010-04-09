@@ -41,6 +41,10 @@ int obj_equals(PyObject* obj1, PyObject* obj2);
 
 void add_new_code_dep(PyCodeObject* cod);
 
+// hook from PyCode_New()
+void pg_init_canonical_name_and_ignore(PyCodeObject* co);
+
+
 void pg_initialize(void);
 void pg_finalize(void);
 
