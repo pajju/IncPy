@@ -39,6 +39,8 @@ PyObject* pickle_filenames;
 
 int obj_equals(PyObject* obj1, PyObject* obj2);
 
+void add_new_code_dep(PyCodeObject* cod);
+
 void pg_initialize(void);
 void pg_finalize(void);
 

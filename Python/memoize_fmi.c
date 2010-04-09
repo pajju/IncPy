@@ -35,7 +35,22 @@ FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod) {
 
   PyObject* cur_code_dependency = 
     PyDict_GetItem(func_name_to_code_dependency, cod->pg_canonical_name);
+
+  // if for some reason cod hasn't yet been entered into
+  // func_name_to_code_dependency, then do it right now
+  if (!cur_code_dependency) {
+    PG_LOG_PRINTF("dict(event='WARNING', what='NEW_func_memo_info: cod not in func_name_to_code_dependency', name='%s')\n",
+                      PyString_AsString(cod->pg_canonical_name));
+
+    add_new_code_dep(cod);
+
+    // now try again, and the lookup had better succeed!
+    cur_code_dependency =
+      PyDict_GetItem(func_name_to_code_dependency, cod->pg_canonical_name);
+  }
+
   assert(cur_code_dependency);
+
 
   // create self-dependency:
   new_fmi->code_dependencies = PyDict_New();
@@ -150,6 +165,7 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
     PyErr_Clear();
 
     my_func_memo_info = NEW_func_memo_info(cod);
+    assert(my_func_memo_info);
 
     // set writeback since it's a brand-new entry
     my_func_memo_info->do_writeback = 1;

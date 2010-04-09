@@ -182,9 +182,8 @@ PyObject* pickle_filenames = NULL;
 PyObject* all_func_memo_info_dict = NULL;
 
 
-/* A DICT that contains all functions (NOT TOP-LEVEL MODULES, sorry)
-   defined in the target program (NOT in initialization code),
-   mapped to their respective code_dependency objects
+/* A DICT that contains all functions mapped to their respective
+   code_dependency objects (add new entries using add_new_code_dep())
 
    Key: canonical name
    Value: A code_dependency 'object' (dict) representing a picklable 
@@ -194,6 +193,8 @@ PyObject* func_name_to_code_dependency = NULL;
 /* A DICT that maps canonical name to the ACTUAL PyCodeObject with that
    canonical name (not to be confused with func_name_to_code_dependency,
    which contains a picklable version of the PyCodeObject).
+
+   (add new entries using add_new_code_dep())
  
    This should be kept in-sync with func_name_to_code_dependency. */
 static PyObject* func_name_to_code_object = NULL;
@@ -363,16 +364,8 @@ PyObject* pg_create_canonical_code_name(PyCodeObject* this_code) {
   return ret;
 }
 
-
-// adds a new entry to func_name_to_code_dependency and
-// func_name_to_code_object when a new function object is created.
-//
-// (private code, should NOT be called from the outside)
-static void private_CREATE_FUNCTION(PyObject* func) {
-  assert(PyFunction_Check(func));
-
-  PyCodeObject* cod = (PyCodeObject*)((PyFunctionObject*)func)->func_code;
-
+// adds cod to func_name_to_code_dependency and func_name_to_code_object
+void add_new_code_dep(PyCodeObject* cod) {
   if (!cod->pg_ignore) {
     PyDict_SetItem(func_name_to_code_object, cod->pg_canonical_name, (PyObject*)cod);
 
@@ -405,6 +398,14 @@ static void private_CREATE_FUNCTION(PyObject* func) {
       func_memo_info->all_code_deps_SAT = 0;
     }
   }
+}
+
+
+static void private_CREATE_FUNCTION(PyObject* func) {
+  assert(PyFunction_Check(func));
+
+  PyCodeObject* cod = (PyCodeObject*)((PyFunctionObject*)func)->func_code;
+  add_new_code_dep(cod);
 }
 
 // called when a new function object is created
