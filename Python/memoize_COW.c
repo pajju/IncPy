@@ -200,8 +200,6 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
     return 0;
   }
 
-  assert(Py_REFCNT(copy) == 1);
-
   /*
 
     check for references to objPtr in these structures for ALL functions:
