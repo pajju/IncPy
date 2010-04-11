@@ -514,6 +514,9 @@ Py_Main(int argc, char **argv)
 
 	if (Py_VerboseFlag ||
 	    (command == NULL && filename == NULL && module == NULL && stdin_is_interactive)) {
+    // pgbovine - add custom start-up banner
+    fprintf(stderr, "IncPy: An auto-memoizing Python interpreter that enables incremental recomputation\nCreated by Philip Guo (pg@cs.stanford.edu)\n\n");
+
 		fprintf(stderr, "Python %s on %s\n",
 			Py_GetVersion(), Py_GetPlatform());
  		if (!Py_NoSiteFlag)
