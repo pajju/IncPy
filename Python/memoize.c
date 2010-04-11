@@ -810,9 +810,7 @@ void pg_finalize() {
       char* hexdigest_str = PyString_AsString(hexdigest);
       PyObject* out_fn = PyString_FromFormat("incpy-cache/%s.pickle",
                                              hexdigest_str);
-
       Py_DECREF(hexdigest);
-      PyDict_SetItem(pickle_filenames, func_name, out_fn);
 
       // Create a serialized form of func_memo_info and pickle
       // it to disk to a file named out_fn
@@ -822,13 +820,28 @@ void pg_finalize() {
       assert(outf);
       tup = PyTuple_Pack(2, serialized_func_memo_info, outf);
       PyObject* cPickle_dump_res = PyObject_Call(cPickle_dump_func, tup, NULL);
-      assert(cPickle_dump_res);
+
+      // note that pickling might still fail if there's something inside
+      // of serialized_func_memo_info that's not picklable (sadly, our
+      // is_picklable() implementation doesn't pick up everything)
+      //
+      // ... we should ONLY add an entry to pickle_filenames
+      // if the pickling actually succeeded
+      if (cPickle_dump_res) {
+        PyDict_SetItem(pickle_filenames, func_name, out_fn);
+        Py_DECREF(cPickle_dump_res);
+      }
+      else {
+        assert(PyErr_Occurred());
+        PyErr_Clear();
+
+        PG_LOG_PRINTF("dict(event='WARNING', what='func_memo_info cannot be pickled', funcname='%s')\n",
+                      PyString_AsString(func_name));
+      }
+
       Py_DECREF(tup);
       Py_DECREF(outf);
-
       Py_DECREF(out_fn);
-      Py_DECREF(cPickle_dump_res);
-
       Py_DECREF(serialized_func_memo_info);
     }
   }
