@@ -1569,6 +1569,14 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     Py_ssize_t s_pos = 0;
     PyObject* written_filename;
     while (_PySet_Next(f->files_written_set, &s_pos, &written_filename)) {
+      // sometimes there are weird 'fake' files with names like
+      // <fdopen> and <tmpfile>, so just ignore those
+      char* filename_str = PyString_AsString(written_filename);
+      int filename_len = strlen(filename_str);
+      if (filename_str[0] == '<' && filename_str[filename_len - 1] == '>') {
+        continue;
+      }
+
       if (!(f->files_opened_w_set && 
             PySet_Contains(f->files_opened_w_set, written_filename) &&
             f->files_closed_set &&
@@ -1700,12 +1708,18 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     while (_PySet_Next(f->files_written_set, &s_pos, &written_filename)) {
       char* filename_cstr = PyString_AsString(written_filename);
       FILE* fp = fopen(filename_cstr, "r");
-      time_t mtime = PyOS_GetLastModificationTime(filename_cstr, fp);
-      fclose(fp);
-      assert (mtime >= 0); // -1 is an error value
-      PyObject* mtime_obj = PyLong_FromLong((long)mtime);
-      PyDict_SetItem(files_written_dict, written_filename, mtime_obj);
-      Py_DECREF(mtime_obj);
+      // it's possible that this file no longer exists (e.g., it was a
+      // temp file that already got deleted) ... right now, let's punt
+      // on those files, but perhaps there should be a better solution
+      // in the future:
+      if (fp) {
+        time_t mtime = PyOS_GetLastModificationTime(filename_cstr, fp);
+        fclose(fp);
+        assert (mtime >= 0); // -1 is an error value
+        PyObject* mtime_obj = PyLong_FromLong((long)mtime);
+        PyDict_SetItem(files_written_dict, written_filename, mtime_obj);
+        Py_DECREF(mtime_obj);
+      }
     }
   }
 
@@ -1948,6 +1962,16 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
 // varname is only used for debugging ...
 void pg_STORE_DEL_GLOBAL_event(PyObject *varname) {
   MEMOIZE_PUBLIC_START()
+
+  // VERY IMPORTANT - if the function on top of the stack is mutating a
+  // global and we're ignoring that function, then we should NOT mark
+  // the entire stack impure.  e.g., standard library functions might
+  // mutate some global variables, but they are still 'pure' from the
+  // point-of-view of client programs
+  if (top_frame->f_code->pg_ignore) {
+    MEMOIZE_PUBLIC_END() // don't forget me!
+    return;
+  }
 
   assert(PyString_CheckExact(varname));
 
