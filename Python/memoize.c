@@ -2182,7 +2182,44 @@ void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) 
 
   MEMOIZE_PUBLIC_START()
 
+  /* ok, what we want to do here is to match func_name against a list of
+     names of methods that are known to mutate their 'self' argument,
+     and if there is a match, call pg_about_to_MUTATE_event(self).  This
+     makes is so that we don't have to manually edit the library C code
+     to explicitly insert calls to pg_about_to_MUTATE_event.
+
+     again, we don't have the module name, only the function name, so
+     there might be false positives.  thankfully, we only do this check
+     for C functions, so there won't be name clashes with user-defined
+     Python functions
+
+  Here are some of the names we want to ignore:
+
+    append - list
+    insert - list
+    extend - list
+    pop - list, dict, set
+    remove - list, set
+    reverse - list
+    sort - list
+    popitem - dict
+    update - dict, set
+    clear - dict, set
+    intersection_update - set
+    difference_update - set
+    symmetric_difference_update - set
+    add - set
+    discard - set
+    resize - numpy.array
+
+  We want this check to happen QUICKLY, since there are potentially LOTS
+  of C function calls */
+
   printf("== %s\n", func_name);
+
+
+  // TODO: once we do this properly, then we can remove all the inserted
+  // pg_about_to_MUTATE_event calls from list, set, and dict object C code
 
   MEMOIZE_PUBLIC_END()
 }
