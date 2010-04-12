@@ -78,6 +78,14 @@ void pg_FILE_CLOSE_event(PyFileObject* fobj);
 void pg_FILE_READ_event(PyFileObject* fobj);
 
 
+// when you're calling a method implemented in C with the name func_name
+// and the self object 'self' ... e.g.,
+// lst = [1,2,3]
+// lst.append(4)
+// (here, func_name is "append" and self is the list object [1,2,3])
+void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self);
+
+
 // handlers for file write operations as defined in Objects/fileobject.c:
 void pg_intercept_PyFile_WriteString(const char *s, PyObject *f);
 void pg_intercept_PyFile_WriteObject(PyObject *v, PyObject *f, int flags);

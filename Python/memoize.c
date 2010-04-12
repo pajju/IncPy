@@ -2168,6 +2168,26 @@ void pg_about_to_MUTATE_event(PyObject *object) {
 }
 
 
+/* Trigger this event when the program is about to call a C extension
+   method with a (possibly null) self parameter.  e.g.,
+
+   lst = [1,2,3]
+   lst.append(4)  // triggers with func_name as "append" and self as [1,2,3]
+
+   Note that we don't have any more detailed information about the C
+   function other than its name, since it's actually straight-up C code,
+   so we can't introspectively find out what module it belongs to, etc. */
+void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) {
+  if (!self) return; // no need to do anything if this is null
+
+  MEMOIZE_PUBLIC_START()
+
+  printf("== %s\n", func_name);
+
+  MEMOIZE_PUBLIC_END()
+}
+
+
 // reading from files
 
 void pg_FILE_OPEN_event(PyFileObject* fobj) {
