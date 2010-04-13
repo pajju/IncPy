@@ -1343,8 +1343,6 @@ dict_update_common(PyObject *self, PyObject *args, PyObject *kwds, char *methnam
 static PyObject *
 dict_update(PyObject *self, PyObject *args, PyObject *kwds)
 {
-  pg_about_to_MUTATE_event(self); // pgbovine
-
 	if (dict_update_common(self, args, kwds, "update") != -1)
 		Py_RETURN_NONE;
 	return NULL;
@@ -1885,8 +1883,6 @@ dict_setdefault(register PyDictObject *mp, PyObject *args)
 static PyObject *
 dict_clear(register PyDictObject *mp)
 {
-  pg_about_to_MUTATE_event(mp); // pgbovine
-
 	PyDict_Clear((PyObject *)mp);
 	Py_RETURN_NONE;
 }
@@ -1898,8 +1894,6 @@ dict_pop(PyDictObject *mp, PyObject *args)
 	PyDictEntry *ep;
 	PyObject *old_value, *old_key;
 	PyObject *key, *deflt = NULL;
-
-  pg_about_to_MUTATE_event(mp); // pgbovine
 
 	if(!PyArg_UnpackTuple(args, "pop", 1, 2, &key, &deflt))
 		return NULL;
@@ -1945,8 +1939,6 @@ dict_popitem(PyDictObject *mp)
 	Py_ssize_t i = 0;
 	PyDictEntry *ep;
 	PyObject *res;
-
-  pg_about_to_MUTATE_event(mp); // pgbovine
 
 	/* Allocate the result tuple before checking the size.  Believe it
 	 * or not, this allocation could trigger a garbage collection which
