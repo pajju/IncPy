@@ -210,6 +210,66 @@ PyFrameObject* top_frame = NULL;
 static PyObject* ignore_paths_lst = NULL;
 
 
+// Super-simple trie implementation for doing fast string matching:
+
+typedef struct _trie {
+  struct _trie* children[128]; // we support ASCII characters 0 to 127
+  int elt_is_present; // 1 if there is an element present here
+} Trie;
+
+
+static Trie* TrieCalloc(void) {
+  Trie* new_trie = PyMem_New(Trie, 1);
+  // VERY important to blank out all elements
+  memset(new_trie, 0, sizeof(*new_trie));
+  return new_trie;
+}
+
+static void TrieFree(Trie* t) {
+  // free all your children before freeing yourself
+  unsigned char i;
+  for (i = 0; i < 128; i++) {
+    if (t->children[i]) {
+      TrieFree(t->children[i]);
+    }
+  }
+
+  PyMem_Del(t);
+}
+
+static void TrieInsert(Trie* t, char* ascii_string) {
+  while (*ascii_string != '\0') {
+    unsigned char idx = (unsigned char)*ascii_string;
+    assert(idx < 128); // we don't support extended ASCII characters
+    if (!t->children[idx]) {
+      t->children[idx] = TrieCalloc();
+    }
+    t = t->children[idx];
+    ascii_string++;
+  }
+
+  t->elt_is_present = 1;
+}
+
+static int TrieContains(Trie* t, char* ascii_string) {
+  while (*ascii_string != '\0') {
+    unsigned char idx = (unsigned char)*ascii_string;
+    t = t->children[idx];
+    if (!t) {
+      return 0; // early termination, no match!
+    }
+    ascii_string++;
+  }
+
+  return t->elt_is_present;
+}
+
+// trie containing the names of C methods that mutate their 'self' arg
+// --- initialize in pg_initialize():
+static Trie* self_mutator_c_methods = NULL;
+static void init_self_mutator_c_methods(void);
+
+
 // returns 1 iff "obj1 == obj2" in Python-world
 // (can be SLOW when comparing large objects)
 int obj_equals(PyObject* obj1, PyObject* obj2) {
@@ -762,6 +822,8 @@ void pg_initialize() {
   else {
     USER_LOG_PRINTF("=== %s START\n", time_buf);
   }
+
+  init_self_mutator_c_methods();
 
   pg_activated = 1;
 }
@@ -2168,6 +2230,31 @@ void pg_about_to_MUTATE_event(PyObject *object) {
 }
 
 
+/* initialize self_mutator_c_methods to a trie containing the names of C
+   methods that mutate their 'self' parameter */
+static void init_self_mutator_c_methods(void) {
+  self_mutator_c_methods = TrieCalloc();
+
+  // we will ignore methods from these common C extension types:
+  TrieInsert(self_mutator_c_methods, "append"); // list
+  TrieInsert(self_mutator_c_methods, "insert"); // list
+  TrieInsert(self_mutator_c_methods, "extend"); // list
+  TrieInsert(self_mutator_c_methods, "pop"); // list, dict, set
+  TrieInsert(self_mutator_c_methods, "remove"); // list, set
+  TrieInsert(self_mutator_c_methods, "reverse"); // list
+  TrieInsert(self_mutator_c_methods, "sort"); // list
+  TrieInsert(self_mutator_c_methods, "popitem"); // dict
+  TrieInsert(self_mutator_c_methods, "update"); // dict, set
+  TrieInsert(self_mutator_c_methods, "clear"); // dict, set
+  TrieInsert(self_mutator_c_methods, "intersection_update"); // set
+  TrieInsert(self_mutator_c_methods, "difference_update"); // set
+  TrieInsert(self_mutator_c_methods, "symmetric_difference_update"); // set
+  TrieInsert(self_mutator_c_methods, "add"); // set
+  TrieInsert(self_mutator_c_methods, "discard"); // set
+  TrieInsert(self_mutator_c_methods, "resize"); // numpy.array
+}
+
+
 /* Trigger this event when the program is about to call a C extension
    method with a (possibly null) self parameter.  e.g.,
 
@@ -2193,29 +2280,9 @@ void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) 
      for C functions, so there won't be name clashes with user-defined
      Python functions
 
-  Here are some of the names we want to ignore:
+     for speed, we rely on a trie called self_mutator_c_methods */
 
-    append - list
-    insert - list
-    extend - list
-    pop - list, dict, set
-    remove - list, set
-    reverse - list
-    sort - list
-    popitem - dict
-    update - dict, set
-    clear - dict, set
-    intersection_update - set
-    difference_update - set
-    symmetric_difference_update - set
-    add - set
-    discard - set
-    resize - numpy.array
-
-  We want this check to happen QUICKLY, since there are potentially LOTS
-  of C function calls */
-
-  printf("== %s\n", func_name);
+  printf("== %s %d\n", func_name, TrieContains(self_mutator_c_methods, func_name));
 
 
   // TODO: once we do this properly, then we can remove all the inserted
