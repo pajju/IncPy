@@ -2137,31 +2137,9 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
 // via C functions like list.sort() and friends
 /*
 
-  Instrumented built-in functions include:
-    list.append()
-    list.insert()
-    list.extend()
-    list.pop()
-    list.remove()
-    list.reverse()
-    list.sort()
-    list_inplace_concat (+=)
-    list_inplace_repeat (*=)
+  Instrumented built-in functions include everything in
+  init_self_mutator_c_methods(), as well as:
 
-    dict.pop()
-    dict.popitem()
-    dict.update()
-    dict.clear()
-
-    set.update()
-    set.intersection_update()
-    set.difference_update()
-    set.symmetric_difference_update()
-    set.add()
-    set.remove()
-    set.discard()
-    set.pop()
-    set.clear()
     set_isub (-=)
     set_iand (&=)
     set_ixor (^=)
@@ -2265,9 +2243,12 @@ static void init_self_mutator_c_methods(void) {
    function other than its name, since it's actually straight-up C code,
    so we can't introspectively find out what module it belongs to, etc. */
 void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) {
-  if (!self) return; // no need to do anything if this is null
+  // note that we don't wrap this function in MEMOIZE_PUBLIC_START and
+  // MEMOIZE_PUBLIC_END since we don't plan to call any nested functions
+  // and so that pg_about_to_MUTATE_event can properly trigger
+  if (!pg_activated) return;
 
-  MEMOIZE_PUBLIC_START()
+  if (!self) return; // no need to do anything if this is null
 
   /* ok, what we want to do is match func_name against a list of names
      of methods that are known to mutate their 'self' argument, and if
@@ -2281,10 +2262,9 @@ void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) 
 
      for speed, we rely on a trie called self_mutator_c_methods */
   if (TrieContains(self_mutator_c_methods, func_name)) {
+    // note that pg_activated must be 1 for this to have any effect ...
     pg_about_to_MUTATE_event(self);
   }
-
-  MEMOIZE_PUBLIC_END()
 }
 
 
