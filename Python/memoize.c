@@ -785,6 +785,8 @@ void pg_finalize() {
     mkdir("incpy-cache", 0777);
   }
 
+  PyObject* negative_one = PyInt_FromLong(-1);
+
   // serialize and pickle func_memo_info entries to disk
   PyObject* canonical_name = NULL;
   PyObject* fmi_addr = NULL;
@@ -816,9 +818,12 @@ void pg_finalize() {
       // it to disk to a file named out_fn
       PyObject* serialized_func_memo_info = serialize_func_memo_info(func_memo_info);
 
-      PyObject* outf = PyFile_FromString(PyString_AsString(out_fn), "w");
+      // open file in binary mode, since we're going to use a binary
+      // pickle protocol for efficiency
+      PyObject* outf = PyFile_FromString(PyString_AsString(out_fn), "wb");
       assert(outf);
-      tup = PyTuple_Pack(2, serialized_func_memo_info, outf);
+      // pass in -1 to force cPickle to use a binary protocol
+      tup = PyTuple_Pack(3, serialized_func_memo_info, outf, negative_one);
       PyObject* cPickle_dump_res = PyObject_Call(cPickle_dump_func, tup, NULL);
 
       // note that pickling might still fail if there's something inside
@@ -848,13 +853,19 @@ void pg_finalize() {
 
 
   // write out filenames.pickle to disk
-  PyObject* pf = PyFile_FromString("incpy-cache/filenames.pickle", "w");
+
+  // open file in binary mode, since we're going to use a binary
+  // pickle protocol for efficiency
+  PyObject* pf = PyFile_FromString("incpy-cache/filenames.pickle", "wb");
   assert(pf);
-  tup = PyTuple_Pack(2, pickle_filenames, pf);
+  // pass in -1 to force cPickle to use a binary protocol
+  tup = PyTuple_Pack(3, pickle_filenames, pf, negative_one);
   PyObject* filenames_dump_res = PyObject_Call(cPickle_dump_func, tup, NULL);
   Py_DECREF(tup);
   Py_DECREF(pf);
   Py_DECREF(filenames_dump_res);
+
+  Py_DECREF(negative_one);
 
   if (PyErr_Occurred()) {
     PyErr_Print();
