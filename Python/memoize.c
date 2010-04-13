@@ -2213,13 +2213,13 @@ void pg_about_to_MUTATE_event(PyObject *object) {
 static void init_self_mutator_c_methods(void) {
   self_mutator_c_methods = TrieCalloc();
 
-  // we will ignore methods from these common C extension types:
-  TrieInsert(self_mutator_c_methods, "append"); // list
-  TrieInsert(self_mutator_c_methods, "insert"); // list
-  TrieInsert(self_mutator_c_methods, "extend"); // list
-  TrieInsert(self_mutator_c_methods, "pop"); // list, dict, set
-  TrieInsert(self_mutator_c_methods, "remove"); // list, set
-  TrieInsert(self_mutator_c_methods, "reverse"); // list
+  // we want to ignore methods from these common C extension types:
+  TrieInsert(self_mutator_c_methods, "append"); // list, bytearray
+  TrieInsert(self_mutator_c_methods, "insert"); // list, bytearray
+  TrieInsert(self_mutator_c_methods, "extend"); // list, bytearray
+  TrieInsert(self_mutator_c_methods, "pop"); // list, dict, set, bytearray
+  TrieInsert(self_mutator_c_methods, "remove"); // list, set, bytearray
+  TrieInsert(self_mutator_c_methods, "reverse"); // list, bytearray
   TrieInsert(self_mutator_c_methods, "sort"); // list
   TrieInsert(self_mutator_c_methods, "popitem"); // dict
   TrieInsert(self_mutator_c_methods, "update"); // dict, set
