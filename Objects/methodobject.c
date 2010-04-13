@@ -77,7 +77,7 @@ PyCFunction_Call(PyObject *func, PyObject *arg, PyObject *kw)
 	PyObject *self = PyCFunction_GET_SELF(func);
 	Py_ssize_t size;
 
-  // pgbovine
+  // pgbovine - do this BEFORE calling the function!
   pg_about_to_CALL_C_METHOD_WITH_SELF_event(((PyCFunctionObject*)func)->m_ml->ml_name,
                                             self);
 
