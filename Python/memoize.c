@@ -296,6 +296,11 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
 
 // returns 1 if the absolute path represented by the PyString s
 // appears as a PREFIX of some element in ignore_paths_lst
+//
+// TODO: we can use a trie to track prefixes if this seems slow in
+// practice, but I won't refactor until it seems necessary
+// (besides, if there are only a few entries in ignore_paths_lst,
+// then a linear search + strncmp might not be so slow)
 static int prefix_in_ignore_paths_lst(PyObject* s) {
   PyObject* path = NULL;
 
