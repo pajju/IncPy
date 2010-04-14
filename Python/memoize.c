@@ -2223,21 +2223,6 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
 // optimization can work properly (if we insert the call AFTER the
 // mutate happens, then COW will copy the NEW value, not the original
 // value, which defeats the whole purpose)
-//
-// note that we need special-case handling for Python built-in data
-// structures like lists, sets, and dicts, since they implement mutation 
-// via C functions like list.sort() and friends
-/*
-
-  Instrumented built-in functions include everything in
-  init_self_mutator_c_methods(), as well as:
-
-    set_isub (-=)
-    set_iand (&=)
-    set_ixor (^=)
-    set_ior  (|=)
-
- */
 void pg_about_to_MUTATE_event(PyObject *object) {
   MEMOIZE_PUBLIC_START()
 
