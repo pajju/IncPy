@@ -141,6 +141,10 @@ static PyObject* stringIO_constructor = NULL; // cStringIO.StringIO
 static PyObject* abspath_func = NULL; // os.path.abspath
 
 
+// lazily import this if necessary
+static PyObject* numpy_module = NULL;
+
+
 // forward declarations:
 static void mark_impure(PyFrameObject* f, char* why);
 static void mark_entire_stack_impure(char* why);
@@ -224,13 +228,84 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
   int cmp_result = PyObject_Compare(obj1, obj2);
   if (cmp_result < 0) {
     if (PyErr_Occurred()) {
-      // TODO: what's the best way to end execution when we encounter
-      // an unrecoverable exception?
-      PyErr_Print();
-      Py_Exit(1);
+      // if a regular comparison gives an error, then try some
+      // special-purpose comparison functions ...
+
+      const char* obj1_typename = Py_TYPE(obj1)->tp_name;
+      const char* obj2_typename = Py_TYPE(obj2)->tp_name;
+
+      // use numpy.allclose(obj1, obj2) to compare NumPy arrays,
+      // since '==' doesn't return a single boolean value
+      if ((strcmp(obj1_typename, "numpy.ndarray") == 0) &&
+          (strcmp(obj2_typename, "numpy.ndarray") == 0)) {
+        PyErr_Clear(); // forget the error, no worries :)
+
+        // lazy initialize
+        if (!numpy_module) {
+          numpy_module = PyImport_ImportModule("numpy");
+          assert(numpy_module);
+        }
+
+        PyObject* allclose_func = PyObject_GetAttrString(numpy_module, "allclose");
+        assert(allclose_func);
+
+        PyObject* args_tup = PyTuple_Pack(2, obj1, obj2);
+        PyObject* res_bool = PyObject_Call(allclose_func, args_tup, NULL);
+        Py_DECREF(args_tup);
+        Py_DECREF(allclose_func);
+
+        if (res_bool) {
+          int ret = PyObject_IsTrue(res_bool);
+          Py_DECREF(res_bool);
+          return ret;
+        }
+        else {
+          PyErr_Print();
+          fprintf(stderr, "Fatal error in obj_equals for objects of types %s and %s\n",
+                  obj1_typename, obj2_typename);
+          Py_Exit(1);
+        }
+      }
+      else {
+        PyErr_Print();
+        fprintf(stderr, "Fatal error in obj_equals for objects of types %s and %s\n",
+                obj1_typename, obj2_typename);
+        Py_Exit(1);
+      }
     }
   }
+
   return (cmp_result == 0); // 0 means EQUALS
+}
+
+/* Iterates over lst1 and lst2 and calls obj_equals() on each pair of
+   elements, returning 1 iff the lists are identical.  We need to do
+   this rather than directly calling obj_equals() on the two lists, so
+   that we can accommodate for special comparison functions like those
+   used for NumPy arrays. */
+static int lst_equals(PyObject* lst1, PyObject* lst2) {
+  assert(PyList_CheckExact(lst1));
+  assert(PyList_CheckExact(lst2));
+
+  if (lst1 == lst2) {
+    return 1;
+  }
+
+  Py_ssize_t lst1_len = PyList_Size(lst1);
+  Py_ssize_t lst2_len = PyList_Size(lst2);
+
+  if (lst1_len != lst2_len) {
+    return 0;
+  }
+
+  Py_ssize_t i;
+  for (i = 0; i < lst1_len; i++) {
+    if (!obj_equals(PyList_GET_ITEM(lst1, i), PyList_GET_ITEM(lst2, i))) {
+      return 0;
+    }
+  }
+
+  return 1;
 }
 
 
@@ -900,6 +975,7 @@ void pg_finalize() {
   Py_CLEAR(hashlib_md5_func);
   Py_CLEAR(stringIO_constructor);
   Py_CLEAR(abspath_func);
+  Py_CLEAR(numpy_module);
 
 
 #ifdef ENABLE_DEBUG_LOGGING // defined in "memoize_logging.h"
@@ -1753,7 +1829,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       assert(memoized_arg_lst);
       // obj_equals is potentially expensive to compute ...
       // especially when you're LINEARLY iterating through memoized_vals_lst
-      if (obj_equals(memoized_arg_lst, stored_args_lst_copy)) {
+      if (lst_equals(memoized_arg_lst, stored_args_lst_copy)) {
         // PUNT on this check, since it can be quite expensive to compute:
         /*
         PyObject* memoized_retval = PyTuple_GetItem(elt, 1);
