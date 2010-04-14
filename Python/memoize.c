@@ -214,6 +214,66 @@ PyFrameObject* top_frame = NULL;
 static PyObject* ignore_paths_lst = NULL;
 
 
+// Super-simple trie implementation for doing fast string matching:
+
+typedef struct _trie {
+  struct _trie* children[128]; // we support ASCII characters 0 to 127
+  int elt_is_present; // 1 if there is an element present here
+} Trie;
+
+
+static Trie* TrieCalloc(void) {
+  Trie* new_trie = PyMem_New(Trie, 1);
+  // VERY important to blank out all elements
+  memset(new_trie, 0, sizeof(*new_trie));
+  return new_trie;
+}
+
+static void TrieFree(Trie* t) {
+  // free all your children before freeing yourself
+  unsigned char i;
+  for (i = 0; i < 128; i++) {
+    if (t->children[i]) {
+      TrieFree(t->children[i]);
+    }
+  }
+
+  PyMem_Del(t);
+}
+
+static void TrieInsert(Trie* t, char* ascii_string) {
+  while (*ascii_string != '\0') {
+    unsigned char idx = (unsigned char)*ascii_string;
+    assert(idx < 128); // we don't support extended ASCII characters
+    if (!t->children[idx]) {
+      t->children[idx] = TrieCalloc();
+    }
+    t = t->children[idx];
+    ascii_string++;
+  }
+
+  t->elt_is_present = 1;
+}
+
+static int TrieContains(Trie* t, char* ascii_string) {
+  while (*ascii_string != '\0') {
+    unsigned char idx = (unsigned char)*ascii_string;
+    t = t->children[idx];
+    if (!t) {
+      return 0; // early termination, no match!
+    }
+    ascii_string++;
+  }
+
+  return t->elt_is_present;
+}
+
+// trie containing the names of C methods that mutate their 'self' arg
+// --- initialize in pg_initialize():
+static Trie* self_mutator_c_methods = NULL;
+static void init_self_mutator_c_methods(void);
+
+
 // returns 1 iff "obj1 == obj2" in Python-world
 // (can be SLOW when comparing large objects)
 int obj_equals(PyObject* obj1, PyObject* obj2) {
@@ -311,6 +371,11 @@ static int lst_equals(PyObject* lst1, PyObject* lst2) {
 
 // returns 1 if the absolute path represented by the PyString s
 // appears as a PREFIX of some element in ignore_paths_lst
+//
+// TODO: we can use a trie to track prefixes if this seems slow in
+// practice, but I won't refactor until it seems necessary
+// (besides, if there are only a few entries in ignore_paths_lst,
+// then a linear search + strncmp might not be so slow)
 static int prefix_in_ignore_paths_lst(PyObject* s) {
   PyObject* path = NULL;
 
@@ -837,6 +902,8 @@ void pg_initialize() {
   else {
     USER_LOG_PRINTF("=== %s START\n", time_buf);
   }
+
+  init_self_mutator_c_methods();
 
   pg_activated = 1;
 }
@@ -2162,31 +2229,9 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
 // via C functions like list.sort() and friends
 /*
 
-  Instrumented built-in functions include:
-    list.append()
-    list.insert()
-    list.extend()
-    list.pop()
-    list.remove()
-    list.reverse()
-    list.sort()
-    list_inplace_concat (+=)
-    list_inplace_repeat (*=)
+  Instrumented built-in functions include everything in
+  init_self_mutator_c_methods(), as well as:
 
-    dict.pop()
-    dict.popitem()
-    dict.update()
-    dict.clear()
-
-    set.update()
-    set.intersection_update()
-    set.difference_update()
-    set.symmetric_difference_update()
-    set.add()
-    set.remove()
-    set.discard()
-    set.pop()
-    set.clear()
     set_isub (-=)
     set_iand (&=)
     set_ixor (^=)
@@ -2252,6 +2297,66 @@ void pg_about_to_MUTATE_event(PyObject *object) {
 #endif
 
   MEMOIZE_PUBLIC_END()
+}
+
+
+/* initialize self_mutator_c_methods to a trie containing the names of C
+   methods that mutate their 'self' parameter */
+static void init_self_mutator_c_methods(void) {
+  self_mutator_c_methods = TrieCalloc();
+
+  // we want to ignore methods from these common C extension types:
+  TrieInsert(self_mutator_c_methods, "append"); // list, bytearray
+  TrieInsert(self_mutator_c_methods, "insert"); // list, bytearray
+  TrieInsert(self_mutator_c_methods, "extend"); // list, bytearray
+  TrieInsert(self_mutator_c_methods, "pop"); // list, dict, set, bytearray
+  TrieInsert(self_mutator_c_methods, "remove"); // list, set, bytearray
+  TrieInsert(self_mutator_c_methods, "reverse"); // list, bytearray
+  TrieInsert(self_mutator_c_methods, "sort"); // list
+  TrieInsert(self_mutator_c_methods, "popitem"); // dict
+  TrieInsert(self_mutator_c_methods, "update"); // dict, set
+  TrieInsert(self_mutator_c_methods, "clear"); // dict, set
+  TrieInsert(self_mutator_c_methods, "intersection_update"); // set
+  TrieInsert(self_mutator_c_methods, "difference_update"); // set
+  TrieInsert(self_mutator_c_methods, "symmetric_difference_update"); // set
+  TrieInsert(self_mutator_c_methods, "add"); // set
+  TrieInsert(self_mutator_c_methods, "discard"); // set
+  TrieInsert(self_mutator_c_methods, "resize"); // numpy.array
+}
+
+
+/* Trigger this event when the program is about to call a C extension
+   method with a (possibly null) self parameter.  e.g.,
+
+   lst = [1,2,3]
+   lst.append(4)  // triggers with func_name as "append" and self as [1,2,3]
+
+   Note that we don't have any more detailed information about the C
+   function other than its name, since it's actually straight-up C code,
+   so we can't introspectively find out what module it belongs to, etc. */
+void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) {
+  // note that we don't wrap this function in MEMOIZE_PUBLIC_START and
+  // MEMOIZE_PUBLIC_END since we don't plan to call any nested functions
+  // and so that pg_about_to_MUTATE_event can properly trigger
+  if (!pg_activated) return;
+
+  if (!self) return; // no need to do anything if this is null
+
+  /* ok, what we want to do is match func_name against a list of names
+     of methods that are known to mutate their 'self' argument, and if
+     there is a match, call pg_about_to_MUTATE_event(self).  This makes
+     is so that we don't have to manually edit the library C code to
+     explicitly insert calls to pg_about_to_MUTATE_event.
+
+     note that we don't have the module name, so there might be false
+     positives.  thankfully, we only do this check for C functions, so
+     there won't be name clashes with user-defined Python functions
+
+     for speed, we rely on a trie called self_mutator_c_methods */
+  if (TrieContains(self_mutator_c_methods, func_name)) {
+    // note that pg_activated must be 1 for this to have any effect ...
+    pg_about_to_MUTATE_event(self);
+  }
 }
 
 

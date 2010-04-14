@@ -3782,6 +3782,11 @@ call_function(PyObject ***pp_stack, int oparg
 		if (flags & (METH_NOARGS | METH_O)) {
 			PyCFunction meth = PyCFunction_GET_FUNCTION(func);
 			PyObject *self = PyCFunction_GET_SELF(func);
+      // pgbovine - catch C 'methods' that have 0 or 1 arguments here,
+      // catch the rest inside of PyCFunction_Call()
+      // (do this BEFORE calling the function!)
+      pg_about_to_CALL_C_METHOD_WITH_SELF_event(((PyCFunctionObject*)func)->m_ml->ml_name,
+                                                self);
 			if (flags & METH_NOARGS && na == 0) {
 				C_TRACE(x, (*meth)(self,NULL));
 			}
