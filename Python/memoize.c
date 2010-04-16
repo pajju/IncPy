@@ -275,6 +275,22 @@ static Trie* self_mutator_c_methods = NULL;
 static void init_self_mutator_c_methods(void);
 
 
+/* detect whether elt implements a non-identity-based comparison (e.g.,
+   using __eq__ or __cmp__ methods); if not, then copies of elt loaded
+   from disk will be a different object than the one in memory, so '=='
+   will ALWAYS FAIL, even if they are semantically equal */
+static int has_comparison_method(PyObject* elt) {
+  // instance objects always have tp_compare and tp_richcompare
+  // methods, so we need to check for __eq__
+  if (PyInstance_Check(elt)) {
+    return PyObject_HasAttrString(elt, "__eq__");
+  }
+  else {
+    return (Py_TYPE(elt)->tp_compare || Py_TYPE(elt)->tp_richcompare);
+  }
+}
+
+
 // returns 1 iff "obj1 == obj2" in Python-world
 // (can be SLOW when comparing large objects)
 int obj_equals(PyObject* obj1, PyObject* obj2) {
@@ -1779,7 +1795,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     PyObject* elt = f->f_localsplus[i];
 
     PyObject* copy = NULL;
-  
+
     if (is_picklable(elt)) {
 #ifdef ENABLE_COW
       // defer the deepcopy until elt has been mutated
@@ -1810,6 +1826,23 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
                     PyString_AsString(canonical_name));
       goto pg_exit_frame_done;
     }
+
+
+    /* don't memoize functions whose arguments don't implement any form
+       of non-identity-based comparison (e.g., using __eq__ or __cmp__
+       methods), since in those cases, there is no way that we can
+       possibly MATCH THEM UP with their original incarnations once we
+       load the memoized values from disk (the version loaded from disk
+       will be a different object than the one in memory, so '==' will
+       ALWAYS FAIL if a comparison method isn't implemented) */
+    if (!has_comparison_method(elt)) {
+      PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Arg %u of %s has no comparison method', type='%s')\n",
+                    (unsigned)i,
+                    PyString_AsString(canonical_name),
+                    Py_TYPE(elt)->tp_name);
+      goto pg_exit_frame_done;
+    }
+
 
     PyList_Append(stored_args_lst_copy, copy); // this does incref copy
     Py_DECREF(copy); // nullify the increfs to prevent leaks
@@ -2043,7 +2076,7 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
      version loaded from disk will be a different object than the one in
      memory, so '==' will ALWAYS FAIL if a comparison method isn't
      implemented) */
-  if (!Py_TYPE(value)->tp_compare && !Py_TYPE(value)->tp_richcompare) {
+  if (!has_comparison_method(value)) {
     PyObject* tmp_str = PyObject_Repr(varname);
     char* varname_str = PyString_AsString(tmp_str);
     PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to a global var whose type has no comparison method', varname=\"%s\", type='%s')\n",
