@@ -285,6 +285,13 @@ static int has_comparison_method(PyObject* elt) {
   if (PyInstance_Check(elt)) {
     return PyObject_HasAttrString(elt, "__eq__");
   }
+  /* make an exception for compiled regular expression pattern objects,
+     since although they don't implement comparison functions, they do
+     some sort of interning that allows them to be compared properly
+     using '==' */
+  else if (strcmp(Py_TYPE(elt)->tp_name, "_sre.SRE_Pattern") == 0) {
+    return 1;
+  }
   else {
     return (Py_TYPE(elt)->tp_compare || Py_TYPE(elt)->tp_richcompare);
   }
