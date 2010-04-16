@@ -294,54 +294,44 @@ static int has_comparison_method(PyObject* elt) {
 // returns 1 iff "obj1 == obj2" in Python-world
 // (can be SLOW when comparing large objects)
 int obj_equals(PyObject* obj1, PyObject* obj2) {
-  // spec for PyObject_Compare from Objects/object.c
-  /* Compare v to w.  Return
-     -1 if v <  w or exception (PyErr_Occurred() true in latter case).
-      0 if v == w.
-      1 if v > w.
-     XXX The docs (C API manual) say the return value is undefined in case
-     XXX of error.
-  */
-  int cmp_result = PyObject_Compare(obj1, obj2);
+  // we want to use this function because it implements "obj1 == obj2"
+  // spec for PyObject_RichCompareBool from Objects/object.c:
+  /* Return -1 if error; 1 if v op w; 0 if not (v op w). */
+  int cmp_result = PyObject_RichCompareBool(obj1, obj2, Py_EQ);
+
   if (cmp_result < 0) {
-    if (PyErr_Occurred()) {
-      // if a regular comparison gives an error, then try some
-      // special-purpose comparison functions ...
+    assert(PyErr_Occurred());
 
-      const char* obj1_typename = Py_TYPE(obj1)->tp_name;
-      const char* obj2_typename = Py_TYPE(obj2)->tp_name;
+    // if a regular comparison gives an error, then try some
+    // special-purpose comparison functions ...
 
-      // use numpy.allclose(obj1, obj2) to compare NumPy arrays,
-      // since '==' doesn't return a single boolean value
-      if ((strcmp(obj1_typename, "numpy.ndarray") == 0) &&
-          (strcmp(obj2_typename, "numpy.ndarray") == 0)) {
-        PyErr_Clear(); // forget the error, no worries :)
+    const char* obj1_typename = Py_TYPE(obj1)->tp_name;
+    const char* obj2_typename = Py_TYPE(obj2)->tp_name;
 
-        // lazy initialize
-        if (!numpy_module) {
-          numpy_module = PyImport_ImportModule("numpy");
-          assert(numpy_module);
-        }
+    // use numpy.allclose(obj1, obj2) to compare NumPy arrays,
+    // since '==' doesn't return a single boolean value
+    if ((strcmp(obj1_typename, "numpy.ndarray") == 0) &&
+        (strcmp(obj2_typename, "numpy.ndarray") == 0)) {
+      PyErr_Clear(); // forget the error, no worries :)
 
-        PyObject* allclose_func = PyObject_GetAttrString(numpy_module, "allclose");
-        assert(allclose_func);
+      // lazy initialize
+      if (!numpy_module) {
+        numpy_module = PyImport_ImportModule("numpy");
+        assert(numpy_module);
+      }
 
-        PyObject* args_tup = PyTuple_Pack(2, obj1, obj2);
-        PyObject* res_bool = PyObject_Call(allclose_func, args_tup, NULL);
-        Py_DECREF(args_tup);
-        Py_DECREF(allclose_func);
+      PyObject* allclose_func = PyObject_GetAttrString(numpy_module, "allclose");
+      assert(allclose_func);
 
-        if (res_bool) {
-          int ret = PyObject_IsTrue(res_bool);
-          Py_DECREF(res_bool);
-          return ret;
-        }
-        else {
-          PyErr_Print();
-          fprintf(stderr, "Fatal error in obj_equals for objects of types %s and %s\n",
-                  obj1_typename, obj2_typename);
-          Py_Exit(1);
-        }
+      PyObject* args_tup = PyTuple_Pack(2, obj1, obj2);
+      PyObject* res_bool = PyObject_Call(allclose_func, args_tup, NULL);
+      Py_DECREF(args_tup);
+      Py_DECREF(allclose_func);
+
+      if (res_bool) {
+        int ret = PyObject_IsTrue(res_bool);
+        Py_DECREF(res_bool);
+        return ret;
       }
       else {
         PyErr_Print();
@@ -350,9 +340,15 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
         Py_Exit(1);
       }
     }
+    else {
+      PyErr_Print();
+      fprintf(stderr, "Fatal error in obj_equals for objects of types %s and %s\n",
+              obj1_typename, obj2_typename);
+      Py_Exit(1);
+    }
   }
 
-  return (cmp_result == 0); // 0 means EQUALS
+  return cmp_result;
 }
 
 /* Iterates over lst1 and lst2 and calls obj_equals() on each pair of
