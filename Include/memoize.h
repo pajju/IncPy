@@ -32,10 +32,11 @@ PyFrameObject* top_frame;
 PyObject* all_func_memo_info_dict;
 PyObject* func_name_to_code_dependency;
 
-PyObject* deepcopy_func;
 PyObject* cPickle_dumpstr_func;
 PyObject* cPickle_load_func;
 PyObject* pickle_filenames;
+
+PyObject* deepcopy(PyObject* obj);
 
 int obj_equals(PyObject* obj1, PyObject* obj2);
 

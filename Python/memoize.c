@@ -129,7 +129,7 @@ static FILE* user_log_file = NULL;
 
 // References to Python standard library functions:
 
-PyObject* deepcopy_func = NULL;               // copy.deepcopy
+static PyObject* deepcopy_func = NULL;        // copy.deepcopy
 PyObject* cPickle_load_func = NULL;           // cPickle.load
 PyObject* cPickle_dumpstr_func = NULL;        // cPickle.dumps
 
@@ -275,14 +275,31 @@ static Trie* self_mutator_c_methods = NULL;
 static void init_self_mutator_c_methods(void);
 
 
+// make a deep copy of obj and return it as a new reference
+// (returns NULL on error)
+PyObject* deepcopy(PyObject* obj) {
+  assert(deepcopy_func);
+  PyObject* tup = PyTuple_Pack(1, obj);
+  PyObject* ret = PyObject_Call(deepcopy_func, tup, NULL);
+  Py_DECREF(tup);
+  return ret;
+}
+
+
 /* detect whether elt implements a non-identity-based comparison (e.g.,
    using __eq__ or __cmp__ methods); if not, then copies of elt loaded
    from disk will be a different object than the one in memory, so '=='
    will ALWAYS FAIL, even if they are semantically equal */
 static int has_comparison_method(PyObject* elt) {
+  // this is sort of abusing this macro, but all of these primitive
+  // picklable types should pass with flying colors, even if they don't
+  // explicitly implement a comparison method
+  if (DEFINITELY_PICKLABLE(elt)) {
+    return 1;
+  }
   // instance objects always have tp_compare and tp_richcompare
   // methods, so we need to check for __eq__
-  if (PyInstance_Check(elt)) {
+  else if (PyInstance_Check(elt)) {
     return PyObject_HasAttrString(elt, "__eq__");
   }
   /* make an exception for compiled regular expression pattern objects,
@@ -315,10 +332,12 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
     const char* obj1_typename = Py_TYPE(obj1)->tp_name;
     const char* obj2_typename = Py_TYPE(obj2)->tp_name;
 
-    // use numpy.allclose(obj1, obj2) to compare NumPy arrays,
-    // since '==' doesn't return a single boolean value
-    if ((strcmp(obj1_typename, "numpy.ndarray") == 0) &&
-        (strcmp(obj2_typename, "numpy.ndarray") == 0)) {
+    // use numpy.allclose(obj1, obj2) to compare NumPy arrays and
+    // matrices, since '==' doesn't return a single boolean value
+    if (((strcmp(obj1_typename, "numpy.ndarray") == 0) &&
+         (strcmp(obj2_typename, "numpy.ndarray") == 0)) ||
+        ((strcmp(obj1_typename, "matrix") == 0) &&
+         (strcmp(obj2_typename, "matrix") == 0))) {
       PyErr_Clear(); // forget the error, no worries :)
 
       // lazy initialize
@@ -1525,10 +1544,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     cow_containment_dict_ADD(memoized_retval);
 #else
     // eagerly make the deepcopy NOW!
-    PyObject* tup = PyTuple_Pack(1, memoized_retval);
     // this has a refcount of 1 ... might cause a memory leak
-    memoized_retval_copy = PyObject_Call(deepcopy_func, tup, NULL);
-    Py_DECREF(tup);
+    memoized_retval_copy = deepcopy(memoized_retval);
  
     if (!memoized_retval_copy) {
       assert(PyErr_Occurred());
@@ -1837,9 +1854,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       cow_containment_dict_ADD(elt);
 #else
       // eagerly make the deepcopy NOW!
-      PyObject* tup = PyTuple_Pack(1, elt);
-      copy = PyObject_Call(deepcopy_func, tup, NULL); // this has a refcount of 1
-      Py_DECREF(tup);
+      copy = deepcopy(elt);
 
       if (!copy) {
         assert(PyErr_Occurred());
@@ -1879,9 +1894,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     cow_containment_dict_ADD(retval);
 #else
     // eagerly make the deepcopy NOW!
-    PyObject* tup = PyTuple_Pack(1, retval);
-    retval_copy = PyObject_Call(deepcopy_func, tup, NULL); // this has a refcount of 1
-    Py_DECREF(tup);
+    retval_copy = deepcopy(retval);
 
     if (!retval_copy) {
       assert(PyErr_Occurred());
@@ -2126,12 +2139,7 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
 
 #else
   // deepcopy value before storing it into global_var_dependencies
-
-  // disable tracing when we're calling deepcopy, to prevent potential
-  // infinite recursion
-  PyObject* tup = PyTuple_Pack(1, value);
-	PyObject* global_val_copy = PyObject_Call(deepcopy_func, tup, NULL); // this has a refcount of 1
-  Py_DECREF(tup);
+	PyObject* global_val_copy = deepcopy(value);
 #endif // ENABLE_COW
 
   // if the deepcopy was successful, add it to global_var_dependencies

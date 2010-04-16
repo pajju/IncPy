@@ -181,14 +181,11 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
   long addrLong = PyLong_AsLong(obj_addr);
   PyObject* objPtr = (PyObject*)addrLong;
 
-  PyObject* copy = NULL;
+  PyObject* copy = deepcopy(objPtr);
 
-  PyObject* tup = PyTuple_Pack(1, objPtr);
-  copy = PyObject_Call(deepcopy_func, tup, NULL); // this has a refcount of 1
-  Py_DECREF(tup);
-  
   if (!copy) {
     assert(PyErr_Occurred());
+    PyErr_Print();
     PyErr_Clear();
     /*
 
