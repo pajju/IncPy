@@ -1705,9 +1705,11 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
         copy_and_add_global_var_dependency(global_varname_tuple, val, my_func_memo_info);
       }
       else {
+#ifdef ENABLE_DEBUG_LOGGING
         PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
         PG_LOG_PRINTF("dict(event='WARNING', what='global var not found in top_frame->f_globals', varname=\"%s\")\n", PyString_AsString(tmp_str));
         Py_DECREF(tmp_str);
+#endif // ENABLE_DEBUG_LOGGING
       }
     }
   }
@@ -1793,8 +1795,27 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   Py_ssize_t i;
   for (i = 0; i < f->f_code->co_argcount; i++) {
     PyObject* elt = f->f_localsplus[i];
-
     PyObject* copy = NULL;
+
+
+    /* don't memoize functions whose arguments don't implement any form
+       of non-identity-based comparison (e.g., using __eq__ or __cmp__
+       methods), since in those cases, there is no way that we can
+       possibly MATCH THEM UP with their original incarnations once we
+       load the memoized values from disk (the version loaded from disk
+       will be a different object than the one in memory, so '==' will
+       ALWAYS FAIL if a comparison method isn't implemented)
+
+       for speed purposes, do this BEFORE checking for is_picklable()
+       since has_comparison_method() is much faster! */
+    if (!has_comparison_method(elt)) {
+      PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Arg %u of %s has no comparison method', type='%s')\n",
+                    (unsigned)i,
+                    PyString_AsString(canonical_name),
+                    Py_TYPE(elt)->tp_name);
+      goto pg_exit_frame_done;
+    }
+
 
     if (is_picklable(elt)) {
 #ifdef ENABLE_COW
@@ -1826,23 +1847,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
                     PyString_AsString(canonical_name));
       goto pg_exit_frame_done;
     }
-
-
-    /* don't memoize functions whose arguments don't implement any form
-       of non-identity-based comparison (e.g., using __eq__ or __cmp__
-       methods), since in those cases, there is no way that we can
-       possibly MATCH THEM UP with their original incarnations once we
-       load the memoized values from disk (the version loaded from disk
-       will be a different object than the one in memory, so '==' will
-       ALWAYS FAIL if a comparison method isn't implemented) */
-    if (!has_comparison_method(elt)) {
-      PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Arg %u of %s has no comparison method', type='%s')\n",
-                    (unsigned)i,
-                    PyString_AsString(canonical_name),
-                    Py_TYPE(elt)->tp_name);
-      goto pg_exit_frame_done;
-    }
-
 
     PyList_Append(stored_args_lst_copy, copy); // this does incref copy
     Py_DECREF(copy); // nullify the increfs to prevent leaks
@@ -2032,38 +2036,13 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
 
   PyObject* global_var_dependencies = func_memo_info->global_var_dependencies;
 
-  // lazy initialize
-  if (!global_var_dependencies) {
-    func_memo_info->global_var_dependencies = global_var_dependencies = PyDict_New();
-  }
-
   /* if varname is already in here, then don't bother to add it again
      since we only need to add the global var. value ONCE (the first
      time).  the reason why we don't need to add it again is that if its
      value has been mutated, then global_var_dependencies would have
      been CLEARED, either by a call to mark_impure() or to
      clear_cache_and_mark_pure() due to its dependency being broken */
-  if (PyDict_Contains(global_var_dependencies, varname)) {
-    return;
-  }
-
-
-  // don't bother copying or storing these dependencies, since they're
-  // probably immutable anyhow (and can't be pickled)
-  if (!is_picklable(value)) {
-
-    // to prevent excessive log noise, only print out a warning 
-    // for types that aren't DEFINITELY_NOT_PICKLABLE:
-    if (!DEFINITELY_NOT_PICKLABLE(value)) {
-      PyObject* tmp_str = PyObject_Repr(varname);
-      char* varname_str = PyString_AsString(tmp_str);
-      PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to unpicklable global var', varname=\"%s\", type='%s')\n",
-                    varname_str, Py_TYPE(value)->tp_name);
-      Py_DECREF(tmp_str);
-    }
-
-    // TODO: should I just be conservative and do a
-    // mark_entire_stack_impure()?
+  if (global_var_dependencies && PyDict_Contains(global_var_dependencies, varname)) {
     return;
   }
 
@@ -2075,15 +2054,52 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
      incarnations once we load the memoized dependencies from disk (the
      version loaded from disk will be a different object than the one in
      memory, so '==' will ALWAYS FAIL if a comparison method isn't
-     implemented) */
+     implemented)
+
+     for speed purposes, do this BEFORE checking for is_picklable() since
+     has_comparison_method() is much faster!
+
+   */
   if (!has_comparison_method(value)) {
+
+#ifdef ENABLE_DEBUG_LOGGING
     PyObject* tmp_str = PyObject_Repr(varname);
     char* varname_str = PyString_AsString(tmp_str);
     PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to a global var whose type has no comparison method', varname=\"%s\", type='%s')\n",
                   varname_str, Py_TYPE(value)->tp_name);
     Py_DECREF(tmp_str);
+#endif // ENABLE_DEBUG_LOGGING
+
     return;
   }
+
+
+  // don't bother copying or storing these dependencies, since they're
+  // probably immutable anyhow (and can't be pickled)
+  // (this check can be rather slow, so avoid doing it if possible)
+  if (!is_picklable(value)) {
+
+#ifdef ENABLE_DEBUG_LOGGING
+    // to prevent excessive log noise, only print out a warning 
+    // for types that aren't DEFINITELY_NOT_PICKLABLE:
+    if (!DEFINITELY_NOT_PICKLABLE(value)) {
+      PyObject* tmp_str = PyObject_Repr(varname);
+      char* varname_str = PyString_AsString(tmp_str);
+      PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to unpicklable global var', varname=\"%s\", type='%s')\n",
+                    varname_str, Py_TYPE(value)->tp_name);
+      Py_DECREF(tmp_str);
+    }
+#endif // ENABLE_DEBUG_LOGGING
+
+    return;
+  }
+
+
+  // lazy initialize
+  if (!global_var_dependencies) {
+    func_memo_info->global_var_dependencies = global_var_dependencies = PyDict_New();
+  }
+
 
 
 #ifdef ENABLE_COW
