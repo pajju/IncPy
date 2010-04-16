@@ -669,9 +669,8 @@ static void mark_impure(PyFrameObject* f, char* why) {
 
   // only print log message for functions we're not ignoring:
   if (!f->f_code->pg_ignore) {
-    char* name_str = PyString_AsString(f->f_code->pg_canonical_name);
-    PG_LOG_PRINTF("dict(event='MARK_IMPURE', what='%s', why='%s')\n", name_str, why);
-    USER_LOG_PRINTF("MARK_IMPURE %s | %s\n", name_str, why);
+    PG_LOG_PRINTF("dict(event='MARK_IMPURE', what='%s', why='%s')\n",
+                  PyString_AsString(f->f_code->pg_canonical_name), why);
   }
 
   f->func_memo_info->is_impure = 1;
@@ -1714,16 +1713,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     }
   }
 
-  // punt completely on all impure functions
-  //
-  // VERY SUBTLE: we must put this code AFTER the code to add global
-  // variable dependencies (from f->globals_read_set), since impure 
-  // functions should still maintain global variable dependencies
-  if (my_func_memo_info->is_impure) {
-    // don't forget to clean up!
-    goto pg_exit_frame_done;
-  }
-
 
   // don't bother memoizing results of short-running functions
   // use a short timeout by default, and override it later
@@ -1735,6 +1724,20 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     // don't forget to clean up!
     goto pg_exit_frame_done;
   }
+
+
+  // punt completely on all impure functions
+  //
+  // VERY SUBTLE: we must put this code AFTER the code to add global
+  // variable dependencies (from f->globals_read_set), since impure
+  // functions should still maintain global variable dependencies
+  if (my_func_memo_info->is_impure) {
+    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | impure | runtime %ld ms\n",
+                    PyString_AsString(canonical_name), runtime_ms);
+    // don't forget to clean up!
+    goto pg_exit_frame_done;
+  }
+
 
   /* Don't memoize a function invocation with non-self-contained writes.
    
@@ -1759,6 +1762,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
             f->files_closed_set &&
             PySet_Contains(f->files_closed_set, written_filename))) {
         PG_LOG("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Non self-contained write')");
+        USER_LOG_PRINTF("CANNOT_MEMOIZE %s | non-self-contained file write | runtime %ld ms\n",
+                        PyString_AsString(canonical_name), runtime_ms);
         goto pg_exit_frame_done;
       }
     }
@@ -1771,6 +1776,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
      the aliasing relation, we risk losing correctness. */
   if (contains_externally_aliased_mutable_obj(retval, f)) {
     PG_LOG("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Return value contains externally-aliased mutable object')");
+    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | returning externally-aliased mutable object | runtime %ld ms\n",
+                    PyString_AsString(canonical_name), runtime_ms);
     goto pg_exit_frame_done;
   }
 
@@ -1813,6 +1820,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
                     (unsigned)i,
                     PyString_AsString(canonical_name),
                     Py_TYPE(elt)->tp_name);
+      USER_LOG_PRINTF("CANNOT_MEMOIZE %s | arg %u of type '%s' has no comparison method | runtime %ld ms\n",
+                      PyString_AsString(canonical_name), (unsigned)i, Py_TYPE(elt)->tp_name, runtime_ms);
       goto pg_exit_frame_done;
     }
 
@@ -1845,6 +1854,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Arg %u of %s unpicklable')\n",
                     (unsigned)i,
                     PyString_AsString(canonical_name));
+      USER_LOG_PRINTF("CANNOT_MEMOIZE %s | arg %u unpicklable | runtime %ld ms\n",
+                      PyString_AsString(canonical_name), (unsigned)i, runtime_ms);
       goto pg_exit_frame_done;
     }
 
@@ -1880,6 +1891,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   if (retval_copy == NULL) {
     PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Return value of %s unpicklable')\n", 
                   PyString_AsString(canonical_name));
+    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | return value unpicklable | runtime %ld ms\n",
+                    PyString_AsString(canonical_name), runtime_ms);
     goto pg_exit_frame_done;
   }
 
