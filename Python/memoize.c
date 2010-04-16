@@ -282,6 +282,20 @@ PyObject* deepcopy(PyObject* obj) {
   PyObject* tup = PyTuple_Pack(1, obj);
   PyObject* ret = PyObject_Call(deepcopy_func, tup, NULL);
   Py_DECREF(tup);
+
+  // if we failed, then try to see if we can find a copy() method,
+  // and if so, try to use that instead.  (e.g., NumPy arrays and
+  // matrices have their own copy methods)
+  //
+  // hmmm, we seem to do fine without this for now ... put it back in when we need it:
+  /*
+  if (!ret && PyObject_HasAttrString(obj, "copy")) {
+    assert(PyErr_Occurred());
+    PyErr_Clear();
+    ret = PyObject_CallMethod(obj, "copy", NULL);
+  }
+  */
+
   return ret;
 }
 
@@ -2345,6 +2359,17 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
 // value, which defeats the whole purpose)
 void pg_about_to_MUTATE_event(PyObject *object) {
   MEMOIZE_PUBLIC_START()
+
+  // VERY IMPORTANT - if the function on top of the stack is doing some
+  // mutation and we're ignoring that function, then we should NOT mark
+  // the entire stack impure.  e.g., standard library functions might
+  // mutate some global variables, but they are still 'pure' from the
+  // point-of-view of client programs
+  if (top_frame->f_code->pg_ignore) {
+    MEMOIZE_PUBLIC_END() // don't forget me!
+    return;
+  }
+
 
   // OPTIMIZATION: simply checking for global reachability is really
   // fast, so do this as the first check (most common case) ...
