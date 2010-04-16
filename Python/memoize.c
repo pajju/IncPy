@@ -2017,13 +2017,29 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
     // to prevent excessive log noise, only print out a warning 
     // for types that aren't DEFINITELY_NOT_PICKLABLE:
     if (!DEFINITELY_NOT_PICKLABLE(value)) {
-      PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot pickle global var <compound tuple name>', type='%s')\n", Py_TYPE(value)->tp_name);
+      PyObject* tmp_str = PyObject_Repr(varname);
+      char* varname_str = PyString_AsString(tmp_str);
+      PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to unpicklable global var', name='%s', type='%s')\n",
+                    varname_str, Py_TYPE(value)->tp_name);
+      Py_DECREF(tmp_str);
     }
 
     // TODO: should I just be conservative and do a
     // mark_entire_stack_impure()?
     return;
   }
+
+
+  /* don't bother adding global variable dependencies on class instances
+     that don't implement an __eq__ method, since there is no way that
+     we can possibly MATCH THEM UP with their original incarnations once
+     we load the memoized dependencies from disk (since the versions
+     loaded to disk will be a different object than the one in memory,
+     so '==' will ALWAYS FAIL if a custom __eq__ isn't implemented) */
+  if (PyInstance_Check(value)) {
+    PYPRINT(value);
+  }
+
 
 #ifdef ENABLE_COW
   // defer the deepcopy until value has been mutated
@@ -2107,7 +2123,12 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
 
   PyObject* new_varname = create_varname_tuple(top_frame->f_code->co_filename, varname);
 
-  add_global_read_to_top_frame(new_varname);
+  // only add a global variable dependency if the origin of this value
+  // isn't in code that's being ignored
+  if (!prefix_in_ignore_paths_lst(top_frame->f_code->co_filename)) {
+    add_global_read_to_top_frame(new_varname);
+  }
+
   update_global_container_weakref(value, new_varname);
 
   MEMOIZE_PUBLIC_END()
@@ -2173,7 +2194,12 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value) {
     if (PyModule_CheckExact(object)) {
       // extend the tuple to include the attribute you're reading:
       PyObject* new_varname = extend_with_attrname(object, attrname);
-      add_global_read_to_top_frame(new_varname);
+
+      // only add a global variable dependency if the origin of this value
+      // isn't in code that's being ignored
+      if (!prefix_in_ignore_paths_lst(PyTuple_GET_ITEM(new_varname, 0))) {
+        add_global_read_to_top_frame(new_varname);
+      }
 
       update_global_container_weakref(value, new_varname);
     }
