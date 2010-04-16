@@ -1160,7 +1160,7 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
         // we can't even find the global object, then PUNT!
         PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
         char* varname_str = PyString_AsString(tmp_str);
-        PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_NOT_FOUND', varname='%s')\n",
+        PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_NOT_FOUND', varname=\"%s\")\n",
                       varname_str);
         USER_LOG_PRINTF("GLOBAL_VAR_DEPENDENCY_BROKEN %s | %s not found\n",
                         cur_func_name_str, varname_str);
@@ -1173,7 +1173,7 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
         if (!obj_equals(memoized_value, cur_value)) {
           PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
           char* varname_str = PyString_AsString(tmp_str);
-          PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_CHANGED', varname='%s')\n",
+          PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_CHANGED', varname=\"%s\")\n",
                         varname_str);
           USER_LOG_PRINTF("GLOBAL_VAR_DEPENDENCY_BROKEN %s | %s changed\n",
                           cur_func_name_str, varname_str);
@@ -1690,7 +1690,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       }
       else {
         PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
-        PG_LOG_PRINTF("dict(event='WARNING', what='global var not found in top_frame->f_globals', varname='%s')\n", PyString_AsString(tmp_str));
+        PG_LOG_PRINTF("dict(event='WARNING', what='global var not found in top_frame->f_globals', varname=\"%s\")\n", PyString_AsString(tmp_str));
         Py_DECREF(tmp_str);
       }
     }
@@ -2024,7 +2024,7 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
     if (!DEFINITELY_NOT_PICKLABLE(value)) {
       PyObject* tmp_str = PyObject_Repr(varname);
       char* varname_str = PyString_AsString(tmp_str);
-      PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to unpicklable global var', name='%s', type='%s')\n",
+      PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to unpicklable global var', varname=\"%s\", type='%s')\n",
                     varname_str, Py_TYPE(value)->tp_name);
       Py_DECREF(tmp_str);
     }
@@ -2035,14 +2035,21 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
   }
 
 
-  /* don't bother adding global variable dependencies on class instances
-     that don't implement an __eq__ method, since there is no way that
-     we can possibly MATCH THEM UP with their original incarnations once
-     we load the memoized dependencies from disk (since the versions
-     loaded to disk will be a different object than the one in memory,
-     so '==' will ALWAYS FAIL if a custom __eq__ isn't implemented) */
-  if (PyInstance_Check(value)) {
-    //PYPRINT(value);
+  /* don't bother adding global variable dependencies on objects that
+     don't implement any form of non-identity-based comparison (e.g.,
+     using __eq__ or __cmp__ methods), since in those cases, there is no
+     way that we can possibly MATCH THEM UP with their original
+     incarnations once we load the memoized dependencies from disk (the
+     version loaded from disk will be a different object than the one in
+     memory, so '==' will ALWAYS FAIL if a comparison method isn't
+     implemented) */
+  if (!Py_TYPE(value)->tp_compare && !Py_TYPE(value)->tp_richcompare) {
+    PyObject* tmp_str = PyObject_Repr(varname);
+    char* varname_str = PyString_AsString(tmp_str);
+    PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to a global var whose type has no comparison method', varname=\"%s\", type='%s')\n",
+                  varname_str, Py_TYPE(value)->tp_name);
+    Py_DECREF(tmp_str);
+    return;
   }
 
 
