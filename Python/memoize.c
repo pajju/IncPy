@@ -140,6 +140,7 @@ static PyObject* stringIO_constructor = NULL; // cStringIO.StringIO
 
 static PyObject* abspath_func = NULL; // os.path.abspath
 
+PyObject* ignore_str = NULL;
 
 // lazily import this if necessary
 static PyObject* numpy_module = NULL;
@@ -730,6 +731,8 @@ void pg_initialize() {
   abspath_func = PyObject_GetAttrString(path_module, "abspath");
   assert(abspath_func);
 
+  ignore_str = PyString_FromString("IGNORE");
+
 
   // look for the mandatory incpy.config file in $HOME
   // using os.path.join(os.getenv('HOME'), 'incpy.config')
@@ -1043,6 +1046,8 @@ void pg_finalize() {
   Py_CLEAR(stringIO_constructor);
   Py_CLEAR(abspath_func);
   Py_CLEAR(numpy_module);
+
+  Py_CLEAR(ignore_str);
 
 
 #ifdef ENABLE_DEBUG_LOGGING // defined in "memoize_logging.h"
@@ -2037,7 +2042,7 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
      loaded to disk will be a different object than the one in memory,
      so '==' will ALWAYS FAIL if a custom __eq__ isn't implemented) */
   if (PyInstance_Check(value)) {
-    PYPRINT(value);
+    //PYPRINT(value);
   }
 
 
@@ -2121,13 +2126,21 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
   MEMOIZE_PUBLIC_START()
   assert(top_frame);
 
-  PyObject* new_varname = create_varname_tuple(top_frame->f_code->co_filename, varname);
+  PyObject* new_varname = NULL;
 
-  // only add a global variable dependency if the origin of this value
-  // isn't in code that's being ignored
-  if (!prefix_in_ignore_paths_lst(top_frame->f_code->co_filename)) {
+  // if the code is ignored, use a special ignore_str as the filename
+  // and DO NOT add a global variable dependency
+  if (top_frame->f_code->pg_ignore) {
+    new_varname = create_varname_tuple(ignore_str, varname);
+  }
+  // in the regular case, use the filename and also add a global read
+  // dependency ...
+  else {
+    new_varname = create_varname_tuple(top_frame->f_code->co_filename, varname);
+
     add_global_read_to_top_frame(new_varname);
   }
+  assert(new_varname);
 
   update_global_container_weakref(value, new_varname);
 
@@ -2195,9 +2208,10 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value) {
       // extend the tuple to include the attribute you're reading:
       PyObject* new_varname = extend_with_attrname(object, attrname);
 
-      // only add a global variable dependency if the origin of this value
-      // isn't in code that's being ignored
-      if (!prefix_in_ignore_paths_lst(PyTuple_GET_ITEM(new_varname, 0))) {
+      // only add a global variable dependency if this value did not
+      // originate from a file whose code we want to ignore ...
+      if (strcmp(PyString_AsString(PyTuple_GET_ITEM(new_varname, 0)),
+                 "IGNORE") != 0) {
         add_global_read_to_top_frame(new_varname);
       }
 
@@ -2258,19 +2272,14 @@ void pg_about_to_MUTATE_event(PyObject *object) {
     PyObject* global_container = Py_GLOBAL_CONTAINER_WEAKREF(object);
 
     /* SUPER HACK: ignore mutations to global variables defined in files
-       whose paths are in ignore_paths_lst (e.g., standard library code)
+       whose code we want to ignore (e.g., standard library code)
        Although technically this isn't correct, it's a cheap workaround
        for the fact that some libraries (like re.py) implement global
        caches (see _cache dict in re.py) and actually mutate them when
-       doing otherwise pure operations.
-
-       We are assuming that functions in ignore_paths_lst (e.g.,
-       standard library functions) are pure from the perspective of
-       client code, which I think is fairly reasonable. */
+       doing otherwise pure operations. */
     assert(global_container && PyTuple_CheckExact(global_container));
-    PyObject* filename = PyTuple_GET_ITEM(global_container, 0);
-    assert(filename);
-    if (prefix_in_ignore_paths_lst(filename)) {
+    if (strcmp(PyString_AsString(PyTuple_GET_ITEM(global_container, 0)),
+               "IGNORE") == 0) {
       MEMOIZE_PUBLIC_END()
       return;
     }
