@@ -272,7 +272,10 @@ static int TrieContains(Trie* t, char* ascii_string) {
 // trie containing the names of C methods that mutate their 'self' arg
 // --- initialize in pg_initialize():
 static Trie* self_mutator_c_methods = NULL;
+static Trie* definitely_impure_funcs = NULL;
+
 static void init_self_mutator_c_methods(void);
+static void init_definitely_impure_funcs(void);
 
 
 // make a deep copy of obj and return it as a new reference
@@ -958,6 +961,7 @@ void pg_initialize() {
   }
 
   init_self_mutator_c_methods();
+  init_definitely_impure_funcs();
 
   pg_activated = 1;
 }
@@ -1379,6 +1383,15 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   MEMOIZE_PUBLIC_START_RETNULL()
 
   top_frame = f; // VERYYY important :0
+
+
+  // mark entire stack impure when calling Python functions with names
+  // matching definitely_impure_funcs
+  if (TrieContains(definitely_impure_funcs, PyString_AsString(f->f_code->co_name))) {
+    mark_entire_stack_impure(PyString_AsString(f->f_code->co_name));
+    MEMOIZE_PUBLIC_END() // remember these error paths!
+    return NULL;
+  }
 
   // if this function's code should be ignored, then return early,
   // but still update top_frame so that the caller doesn't get
@@ -2449,6 +2462,27 @@ static void init_self_mutator_c_methods(void) {
   TrieInsert(self_mutator_c_methods, "resize"); // numpy.array
 }
 
+/* some of these are built-in C functions, while others are Python
+   functions.  note that we're currently pretty sloppy since we just do
+   matches on function names and not on their module names */
+static void init_definitely_impure_funcs(void) {
+  definitely_impure_funcs = TrieCalloc();
+
+  TrieInsert(definitely_impure_funcs, "draw"); // matplotlib
+
+  // if you open stdin, then you are impure:
+  TrieInsert(definitely_impure_funcs, "input");
+  TrieInsert(definitely_impure_funcs, "raw_input");
+
+  // random functions:
+  // TODO: let's exclude these for now, since some people actually want
+  // a form of determinism when debugging ... and also some library code
+  // calls random functions on occasion
+  //TrieInsert(definitely_impure_funcs, "random");
+  //TrieInsert(definitely_impure_funcs, "randn");
+  //TrieInsert(definitely_impure_funcs, "randint");
+}
+
 
 /* Trigger this event when the program is about to call a C extension
    method with a (possibly null) self parameter.  e.g.,
@@ -2464,6 +2498,16 @@ void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) 
   // MEMOIZE_PUBLIC_END since we don't plan to call any nested functions
   // and so that pg_about_to_MUTATE_event can properly trigger
   if (!pg_activated) return;
+
+
+  // first check whether we've called a built-in C function that's in
+  // definitely_impure_funcs:
+  if (TrieContains(definitely_impure_funcs, func_name)) {
+    //USER_LOG_PRINTF("IMPURE C FUNCTION CALL | %s\n", func_name);
+    mark_entire_stack_impure(func_name);
+    return;
+  }
+
 
   if (!self) return; // no need to do anything if this is null
 
