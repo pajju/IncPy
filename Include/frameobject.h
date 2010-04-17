@@ -108,6 +108,11 @@ typedef struct _frame {
     // (is NULL for frames representing top-level modules,
     //  or code that we either can't or don't want to track)
     FuncMemoInfo* func_memo_info;
+
+    // list of argument values (aliases, not copies) captured
+    // at the beginning of this frame's execution
+    // (Optimization: remain NULL when empty)
+    PyObject* stored_args_lst;
     /* END   - pgbovine new fields */
 
     PyTryBlock f_blockstack[CO_MAXBLOCKS]; /* for try and loop blocks */

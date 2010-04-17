@@ -1674,6 +1674,24 @@ pg_enter_frame_done:
     f->func_memo_info->do_writeback = 1;
   }
 
+
+  /* We can now use co_argcount to figure out how many parameters are
+     passed on the top of the stack.  By this point, the top of the
+     stack should be populated with passed-in parameter values.  All the
+     grossness of keyword and default arguments have been resolved at
+     this point, yay!
+
+     TODO: I haven't tested support for varargs yet */
+  f->stored_args_lst = PyList_New(f->f_code->co_argcount);
+
+  Py_ssize_t i;
+  for (i = 0; i < f->f_code->co_argcount; i++) {
+    PyObject* elt = f->f_localsplus[i];
+    PyList_SET_ITEM(f->stored_args_lst, i, elt);
+    Py_INCREF(elt);
+  }
+
+
   PG_LOG_PRINTF("dict(event='CALL', what='%s')\n",
                 PyString_AsString(co->pg_canonical_name));
 
@@ -1835,26 +1853,20 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   }
 
 
-  // now grab the argument values and make a DEEPCOPY of them.
+  // now make a DEEPCOPY of argument values before storing them.
   // it's safe to wait until the end of this frame's execution to do so,
   // since they are guaranteed to have the same values as they did at
   // the beginning of execution.  if they were mutated, then this
   // function should be marked impure, so it should not be being
   // memoized in the first place!
-
   stored_args_lst_copy = PyList_New(0);
 
-  /* We can now use co_argcount to figure out how many parameters are
-     passed on the top of the stack.  By this point, the top of the
-     stack should be populated with passed-in parameter values.  All the
-     grossness of keyword and default arguments have been resolved at
-     this point, yay!
-
-     TODO: I haven't tested support for varargs yet */
+  assert(f->stored_args_lst);
+  assert(PyList_Size(f->stored_args_lst) == f->f_code->co_argcount);
 
   Py_ssize_t i;
   for (i = 0; i < f->f_code->co_argcount; i++) {
-    PyObject* elt = f->f_localsplus[i];
+    PyObject* elt = PyList_GET_ITEM(f->stored_args_lst, i);
     PyObject* copy = NULL;
 
 
@@ -2066,6 +2078,11 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     USER_LOG_PRINTF("MEMOIZED %s | runtime %ld ms\n",
                     PyString_AsString(canonical_name),
                     runtime_ms);
+  }
+  else {
+    PG_LOG_PRINTF("dict(event='DO_NOT_MEMOIZE_DUPLICATE', what='%s', runtime_ms='%ld')\n",
+                  PyString_AsString(canonical_name),
+                  runtime_ms);
   }
 
   Py_DECREF(retval_copy); // subtle but important for preventing leaks

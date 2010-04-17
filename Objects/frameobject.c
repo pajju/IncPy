@@ -441,6 +441,7 @@ frame_dealloc(PyFrameObject *f)
   Py_CLEAR(f->files_written_set);
   Py_CLEAR(f->files_closed_set);
   Py_CLEAR(f->globals_read_set);
+  Py_CLEAR(f->stored_args_lst);
 
 
 	co = f->f_code;
@@ -725,6 +726,7 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
   f->files_closed_set = NULL;
   f->globals_read_set = NULL;
   f->func_memo_info = NULL;
+  f->stored_args_lst = NULL;
 
 	return f;
 }
