@@ -976,6 +976,8 @@ void pg_finalize() {
   // it later temporarily when we're calling cPickle_dump_func, etc.
   pg_activated = 0;
 
+  TrieFree(self_mutator_c_methods);
+  TrieFree(definitely_impure_funcs);
 
   PyObject* tup;
 
@@ -1387,6 +1389,10 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   // mark entire stack impure when calling Python functions with names
   // matching definitely_impure_funcs
+  //
+  // TODO: could speed up if necessary by adding an extra field in
+  // the code object (Include/code.h) and doing checking against
+  // definitely_impure_funcs at code creation time rather than call time
   if (TrieContains(definitely_impure_funcs, PyString_AsString(f->f_code->co_name))) {
     mark_entire_stack_impure(PyString_AsString(f->f_code->co_name));
     MEMOIZE_PUBLIC_END() // remember these error paths!
