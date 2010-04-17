@@ -2656,6 +2656,12 @@ void pg_FILE_READ_event(PyFileObject* fobj) {
 
   assert(fobj && fobj->f_fp);
 
+  // we are impure if we read from stdin ...
+  if (strcmp(PyString_AsString(fobj->f_name), "<stdin>") == 0) {
+    mark_entire_stack_impure("read from stdin");
+    goto pg_FILE_READ_event_end;
+  }
+
   // lazy initialize
   if (!top_frame->func_memo_info->file_read_dependencies) {
     top_frame->func_memo_info->file_read_dependencies = PyDict_New();
