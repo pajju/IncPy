@@ -2666,8 +2666,21 @@ Python File objects altogether?
 void pg_FILE_READ_event(PyFileObject* fobj) {
   MEMOIZE_PUBLIC_START()
 
-  // top-level module doesn't have func_memo_info
-  if (!top_frame->func_memo_info) {
+  /* subtle ... if we are ignoring some functions, then we will miss
+     file read dependencies that those ignored functions create; one
+     hack is to simply find the first non-ignored function and add a
+     file read dependency there */
+  PyFrameObject* top_non_ignored_frame = top_frame;
+  while (top_non_ignored_frame &&
+         top_non_ignored_frame->f_code->pg_ignore) {
+    top_non_ignored_frame = top_non_ignored_frame->f_back;
+  }
+
+  if (!top_non_ignored_frame) {
+    goto pg_FILE_READ_event_end;
+  }
+
+  if (!top_non_ignored_frame->func_memo_info) {
     goto pg_FILE_READ_event_end;
   }
 
@@ -2680,12 +2693,12 @@ void pg_FILE_READ_event(PyFileObject* fobj) {
   }
 
   // lazy initialize
-  if (!top_frame->func_memo_info->file_read_dependencies) {
-    top_frame->func_memo_info->file_read_dependencies = PyDict_New();
+  if (!top_non_ignored_frame->func_memo_info->file_read_dependencies) {
+    top_non_ignored_frame->func_memo_info->file_read_dependencies = PyDict_New();
   }
 
   PyObject* file_read_dependencies_dict = 
-    top_frame->func_memo_info->file_read_dependencies;
+    top_non_ignored_frame->func_memo_info->file_read_dependencies;
 
   // if the dependency is already in there, don't bother adding it again
   // (we don't have to worry about the file mutating, since if it
