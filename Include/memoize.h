@@ -59,8 +59,11 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value);
 // handler for BINARY_SUBSCR opcode: ret = obj[ind]
 void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res);
 
-// handler for STORE_GLOBAL(varname) or DELETE_GLOBA(varname)
+// handler for STORE_GLOBAL(varname) or DELETE_GLOBAL(varname)
 void pg_STORE_DEL_GLOBAL_event(PyObject *varname);
+
+void pg_SetAttr_event(PyObject *object, PyObject *attrname, PyObject *new_value);
+
 
 // called whenever object is ABOUT TO BE mutated by either storing or
 // deleting one of its attributes (e.g., in an instance) or items (e.g.,

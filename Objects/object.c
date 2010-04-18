@@ -1263,14 +1263,14 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 
   /* pgbovine - success cases */
 	if (tp->tp_setattro != NULL) {
-    pg_about_to_MUTATE_event(v); // pgbovine
+    pg_SetAttr_event(v, name, value); // pgbovine
 
 		err = (*tp->tp_setattro)(v, name, value);
 		Py_DECREF(name);
 		return err;
 	}
 	if (tp->tp_setattr != NULL) {
-    pg_about_to_MUTATE_event(v); // pgbovine
+    pg_SetAttr_event(v, name, value); // pgbovine
 
 		err = (*tp->tp_setattr)(v, PyString_AS_STRING(name), value);
 		Py_DECREF(name);

@@ -1476,6 +1476,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   PyObject* memoized_retval = NULL;
   PyObject* memoized_stdout_buf = NULL;
   PyObject* memoized_stderr_buf = NULL;
+  PyObject* globals_mutated_dict = NULL;
 
   long memoized_runtime_ms = -1;
 
@@ -1556,6 +1557,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         memoized_stdout_buf = PyDict_GetItemString(elt, "stdout_buf");
         memoized_stderr_buf = PyDict_GetItemString(elt, "stderr_buf");
 
+        globals_mutated_dict = PyDict_GetItemString(elt, "globals_mutated");
+
         break; // break out of this loop, we've found a match!
       }
     }
@@ -1623,6 +1626,36 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
                              cur_frame->stderr_cStringIO);
         }
         cur_frame = cur_frame->f_back;
+      }
+    }
+
+    if (globals_mutated_dict) {
+      PyObject* global_varname = NULL;
+      PyObject* new_value = NULL;
+      Py_ssize_t pos = 0; // reset it!
+      while (PyDict_Next(globals_mutated_dict, &pos, &global_varname, &new_value)) {
+        // we need to go BACK one attribute to find the parent of the
+        // object we mutated ...
+
+        Py_ssize_t len = PyTuple_Size(global_varname);
+        assert(len > 2);
+
+        PyObject* parent_varname = PyTuple_New(len - 1);
+
+        Py_ssize_t i;
+        for (i = 0; i < len - 1; i++) {
+          PyObject* elt = PyTuple_GET_ITEM(global_varname, i);
+          Py_INCREF(elt);
+          PyTuple_SET_ITEM(parent_varname, i, elt);
+        }
+        PyObject* attrname = PyTuple_GET_ITEM(global_varname, len - 1);
+
+        PyObject* parent_obj = find_globally_reachable_obj_by_name(parent_varname, f);
+        assert(parent_obj); // TODO: handle failures
+
+        PyObject_SetAttr(parent_obj, attrname, new_value);
+
+        Py_DECREF(parent_varname);
       }
     }
 
@@ -1718,6 +1751,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   assert(top_frame == f);
 
   if (f->f_code->pg_ignore) {
+    assert(!f->globals_mutated_set);
     goto pg_exit_frame_done;
   }
 
@@ -1743,45 +1777,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   // don't do anything tracing for code without a func_memo_info
   if (!my_func_memo_info) {
+    assert(!f->globals_mutated_set);
     goto pg_exit_frame_done;
-  }
-
-
-  /* Optimization: When we execute a LOAD of a global or
-     globally-reachable value, we simply add its NAME to
-     top_frame->globals_read_set but NOT a dependency on it.  We defer
-     the adding of dependencies until the END of a frame's execution.
-   
-     Grabbing the global variable values at this time is always safe
-     because they are guaranteed to have the SAME VALUES as when they
-     were read earlier during this function's invocation.  If the values
-     were mutated, then the entire stack would've been marked impure
-     anyways, so we wouldn't be memoizing this invocation!
-  
-     For correctness, we must do this at the exit of every PURE
-     function, not merely for functions that are going to be memoized.
-     That's because we need to track transitive global variable
-     dependencies.  e.g., if foo calls bar and bar reads a global X,
-     then even if bar isn't memoized, if foo is memoized, it must know
-     that bar depends on global X, since it itself transitively depends
-     on X as well. */
-  if (f->globals_read_set) {
-    Py_ssize_t pos = 0;
-    PyObject* global_varname_tuple;
-    while (_PySet_Next(f->globals_read_set, &pos, &global_varname_tuple)) {
-      PyObject* val = find_globally_reachable_obj_by_name(global_varname_tuple, f);
-
-      if (val) {
-        copy_and_add_global_var_dependency(global_varname_tuple, val, my_func_memo_info);
-      }
-      else {
-#ifdef ENABLE_DEBUG_LOGGING
-        PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
-        PG_LOG_PRINTF("dict(event='WARNING', what='global var not found in top_frame->f_globals', varname=\"%s\")\n", PyString_AsString(tmp_str));
-        Py_DECREF(tmp_str);
-#endif // ENABLE_DEBUG_LOGGING
-      }
-    }
   }
 
 
@@ -1798,10 +1795,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
 
   // punt completely on all impure functions
-  //
-  // VERY SUBTLE: we must put this code AFTER the code to add global
-  // variable dependencies (from f->globals_read_set), since impure
-  // functions should still maintain global variable dependencies
   if (my_func_memo_info->is_impure) {
     USER_LOG_PRINTF("CANNOT_MEMOIZE %s | impure | runtime %ld ms\n",
                     PyString_AsString(canonical_name), runtime_ms);
@@ -2064,6 +2057,27 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       Py_DECREF(tmp);
     }
 
+    // grab the values of global variables that have been mutated
+    if (f->globals_mutated_set) {
+      PyObject* globals_mutated_dict = PyDict_New();
+
+      Py_ssize_t s_pos = 0;
+      PyObject* mutated_varname;
+      while (_PySet_Next(f->globals_mutated_set, &s_pos, &mutated_varname)) {
+        PyObject* final_value = find_globally_reachable_obj_by_name(mutated_varname, f);
+        assert(final_value); // TODO: handle failures
+
+        PyDict_SetItem(globals_mutated_dict, mutated_varname, final_value);
+      }
+
+      PyDict_SetItemString(memo_table_entry, "globals_mutated", globals_mutated_dict);
+
+      Py_DECREF(globals_mutated_dict);
+
+      // clear this so that we don't trip the condition at pg_exit_frame_done
+      Py_CLEAR(f->globals_mutated_set);
+    }
+
     // lazy initialize
     if (!memoized_vals_lst) {
       my_func_memo_info->memoized_vals = memoized_vals_lst = PyList_New(0);
@@ -2089,6 +2103,16 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
 
 pg_exit_frame_done:
+
+  // if we can't memoize this function but it's mutated some globals,
+  // then we've gotta mark the entire stack impure since we can't simply
+  // replay these global mutations
+  //
+  // it's VERY IMPORTANT for us to Py_CLEAR(f->globals_mutated_set) if
+  // we end up memoizing its results, or else we will trip this branch:
+  if (f->globals_mutated_set) {
+    mark_entire_stack_impure("non-memoized function mutated a global");
+  }
 
   Py_XDECREF(stored_args_lst_copy);
 
@@ -2226,11 +2250,19 @@ static void add_global_read_to_top_frame(PyObject* global_container) {
       return;
     }
 
-    // lazy initialize set
-    if (!top_frame->globals_read_set) {
-      top_frame->globals_read_set = PySet_New(NULL);
+    PyObject* val = find_globally_reachable_obj_by_name(global_container, top_frame);
+
+    if (val) {
+      copy_and_add_global_var_dependency(global_container, val,
+                                         top_frame->func_memo_info);
     }
-    PySet_Add(top_frame->globals_read_set, global_container);
+    else {
+#ifdef ENABLE_DEBUG_LOGGING
+      PyObject* tmp_str = PyObject_Repr(global_container);
+      PG_LOG_PRINTF("dict(event='WARNING', what='global var not found in top_frame->f_globals', varname=\"%s\")\n", PyString_AsString(tmp_str));
+      Py_DECREF(tmp_str);
+#endif // ENABLE_DEBUG_LOGGING
+    }
   }
 }
 
@@ -2327,30 +2359,17 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value) {
   MEMOIZE_PUBLIC_START()
 
   if (IS_GLOBALLY_REACHABLE(object)) {
-    // If object is a MODULE, then we need to add a more detailed
-    // record not just using the module name, but also attach attrname
-    // (which is the name of the variable within the module)
-    //
-    // TODO: do we want to generalize this to when object is something
-    // other than a module? (e.g., for foo.bar.baz, where foo is a general
-    // object, this would also work)
-    if (PyModule_CheckExact(object)) {
-      // extend the tuple to include the attribute you're reading:
-      PyObject* new_varname = extend_with_attrname(object, attrname);
+    // extend the tuple to include the attribute you're reading:
+    PyObject* new_varname = extend_with_attrname(object, attrname);
 
-      // only add a global variable dependency if this value did not
-      // originate from a file whose code we want to ignore ...
-      if (strcmp(PyString_AsString(PyTuple_GET_ITEM(new_varname, 0)),
-                 "IGNORE") != 0) {
-        add_global_read_to_top_frame(new_varname);
-      }
+    // only add a global variable dependency if this value did not
+    // originate from a file whose code we want to ignore ...
+    if (strcmp(PyString_AsString(PyTuple_GET_ITEM(new_varname, 0)),
+               "IGNORE") != 0) {
+      add_global_read_to_top_frame(new_varname);
+    }
 
-      update_global_container_weakref(value, new_varname);
-    }
-    else {
-      // extend global reachability to value
-      update_global_container_weakref(value, Py_GLOBAL_CONTAINER_WEAKREF(object));
-    }
+    update_global_container_weakref(value, new_varname);
   }
 
   MEMOIZE_PUBLIC_END()
@@ -2549,6 +2568,56 @@ void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) 
     // note that pg_activated must be 1 for this to have any effect ...
     pg_about_to_MUTATE_event(self);
   }
+}
+
+
+void pg_SetAttr_event(PyObject *object, PyObject *attrname, PyObject *new_value) {
+  // this is currently a shoddy copy-and-paste of pg_about_to_MUTATE_event:
+
+  MEMOIZE_PUBLIC_START()
+
+  // VERY IMPORTANT - if the function on top of the stack is doing some
+  // mutation and we're ignoring that function, then we should NOT mark
+  // the entire stack impure.  e.g., standard library functions might
+  // mutate some global variables, but they are still 'pure' from the
+  // point-of-view of client programs
+  if (top_frame->f_code->pg_ignore) {
+    MEMOIZE_PUBLIC_END() // don't forget me!
+    return;
+  }
+
+
+  if (IS_GLOBALLY_REACHABLE(object)) {
+    PyObject* global_container = Py_GLOBAL_CONTAINER_WEAKREF(object);
+
+    /* SUPER HACK: ignore mutations to global variables defined in files
+       whose code we want to ignore (e.g., standard library code)
+       Although technically this isn't correct, it's a cheap workaround
+       for the fact that some libraries (like re.py) implement global
+       caches (see _cache dict in re.py) and actually mutate them when
+       doing otherwise pure operations. */
+    assert(global_container && PyTuple_CheckExact(global_container));
+    if (strcmp(PyString_AsString(PyTuple_GET_ITEM(global_container, 0)),
+               "IGNORE") == 0) {
+      MEMOIZE_PUBLIC_END()
+      return;
+    }
+
+
+    if (!top_frame->globals_mutated_set) {
+      top_frame->globals_mutated_set = PySet_New(NULL);
+    }
+
+    PyObject* new_varname = extend_with_attrname(object, attrname);
+    PySet_Add(top_frame->globals_mutated_set, new_varname);
+  }
+
+#ifdef ENABLE_COW
+  // TODO: this occurs on EVERY mutation event, so it might be slow
+  check_COW_mutation(object);
+#endif
+
+  MEMOIZE_PUBLIC_END()
 }
 
 
