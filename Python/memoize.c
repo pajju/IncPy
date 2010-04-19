@@ -335,6 +335,8 @@ static int has_comparison_method(PyObject* elt) {
 // returns 1 iff "obj1 == obj2" in Python-world
 // (can be SLOW when comparing large objects)
 int obj_equals(PyObject* obj1, PyObject* obj2) {
+  // first try the regular generic '==' comparison function:
+
   // we want to use this function because it implements "obj1 == obj2"
   // spec for PyObject_RichCompareBool from Objects/object.c:
   /* Return -1 if error; 1 if v op w; 0 if not (v op w). */
@@ -351,10 +353,14 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
 
     // use numpy.allclose(obj1, obj2) to compare NumPy arrays and
     // matrices, since '==' doesn't return a single boolean value
-    if (((strcmp(obj1_typename, "numpy.ndarray") == 0) &&
-         (strcmp(obj2_typename, "numpy.ndarray") == 0)) ||
-        ((strcmp(obj1_typename, "matrix") == 0) &&
-         (strcmp(obj2_typename, "matrix") == 0))) {
+    //
+    // TODO: use a trie if this seems too slow ...
+    if ((strcmp(obj1_typename, "numpy.ndarray") == 0) ||
+        (strcmp(obj1_typename, "matrix") == 0) ||
+        (strcmp(obj1_typename, "MaskedArray") == 0) ||
+        (strcmp(obj2_typename, "numpy.ndarray") == 0) ||
+        (strcmp(obj2_typename, "matrix") == 0) ||
+        (strcmp(obj2_typename, "MaskedArray") == 0)) {
       PyErr_Clear(); // forget the error, no worries :)
 
       // lazy initialize
@@ -377,17 +383,21 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
         return ret;
       }
       else {
-        PyErr_Print();
-        fprintf(stderr, "Fatal error in obj_equals for objects of types %s and %s\n",
-                obj1_typename, obj2_typename);
-        Py_Exit(1);
+        // hide the failure and simply return 0 ...
+        assert(PyErr_Occurred());
+        PyErr_Clear();
+        PG_LOG_PRINTF("dict(event='WARNING', what='Error in obj_equals', obj1_type='%s', obj2_type='%s')\n",
+                      obj1_typename, obj2_typename);
+        return 0;
       }
     }
     else {
-      PyErr_Print();
-      fprintf(stderr, "Fatal error in obj_equals for objects of types %s and %s\n",
-              obj1_typename, obj2_typename);
-      Py_Exit(1);
+      // hide the failure and simply return 0 ...
+      assert(PyErr_Occurred());
+      PyErr_Clear();
+      PG_LOG_PRINTF("dict(event='WARNING', what='Error in obj_equals', obj1_type='%s', obj2_type='%s')\n",
+                    obj1_typename, obj2_typename);
+      return 0;
     }
   }
 

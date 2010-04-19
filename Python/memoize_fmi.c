@@ -139,11 +139,18 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
       // currently being unpickled
       PyObject* tup = PyTuple_Pack(1, pf);
       PyObject* serialized_func_memo_info = PyObject_Call(cPickle_load_func, tup, NULL);
-      assert(serialized_func_memo_info);
 
-      my_func_memo_info = deserialize_func_memo_info(serialized_func_memo_info, cod);
+      // only initialize my_func_memo_info if serialized_func_memo_info
+      // can be properly unpickled
+      if (!serialized_func_memo_info) {
+        assert(PyErr_Occurred());
+        PyErr_Clear();
+      }
+      else {
+        my_func_memo_info = deserialize_func_memo_info(serialized_func_memo_info, cod);
+        Py_DECREF(serialized_func_memo_info);
+      }
 
-      Py_DECREF(serialized_func_memo_info);
       Py_DECREF(tup);
       Py_DECREF(pf);
     }
@@ -153,7 +160,7 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
       PyErr_Print();
       PG_LOG_PRINTF("dict(event='ERROR', why='PICKLE_FILE_NOT_FOUND', what='%s')\n",
                     PyString_AsString(cod->pg_canonical_name));
-      fprintf(stderr, "ERROR: cache file %s not found",
+      fprintf(stderr, "\nFATAL ERROR: cache file %s not found.\nTry deleting incpy-cache/ sub-directory and starting over again.\n",
               PyString_AsString(pickle_filename));
       Py_Exit(1);
     }
