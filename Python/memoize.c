@@ -167,6 +167,14 @@ extern FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod);
 extern PyObject* serialize_func_memo_info(FuncMemoInfo* func_memo_info);
 
 
+// set time limit to something smaller for debug mode, so that my
+// regression tests can run faster
+#if defined(Py_DEBUG)
+unsigned int memoize_time_limit_ms = 100;
+#else
+unsigned int memoize_time_limit_ms = 1000;
+#endif // Py_DEBUG
+
 // A dict (which will be pickled into filenames.pickle) that contains
 // the mangled filenames of .pickle files holding each func_memo_info
 // object.  This will be saved to disk.
@@ -835,6 +843,8 @@ void pg_initialize() {
 
   // parse incpy.config to look for lines of the following form:
   //   ignore = <prefix of path to ignore>
+  //   time_limit = <time limit in SECONDS>
+
   ignore_paths_lst = PyList_New(0);
 
   PyObject* config_file = PyFile_FromString(PyString_AsString(incpy_config_path), "r");
@@ -855,7 +865,6 @@ void pg_initialize() {
     PyObject* line = PyList_GET_ITEM(all_lines, i);
     PyObject* toks = PyObject_CallMethodObjArgs(line, split_str, equal_str, NULL);
     assert(toks);
-    // we are looking for tokens of the form 'ignore = <path prefix>'
     if (PyList_Size(toks) == 2) {
       PyObject* lhs = PyList_GET_ITEM(toks, 0);
       PyObject* rhs = PyList_GET_ITEM(toks, 1);
@@ -863,7 +872,7 @@ void pg_initialize() {
       PyObject* lhs_stripped = PyObject_CallMethodObjArgs(lhs, strip_str, NULL);
       PyObject* rhs_stripped = PyObject_CallMethodObjArgs(rhs, strip_str, NULL);
 
-      // woohoo, we have a winner!
+      // 'ignore = <path prefix>'
       if (strcmp(PyString_AsString(lhs_stripped), "ignore") == 0) {
         // first grab the absolute path:
         tmp_tup = PyTuple_Pack(1, rhs_stripped);
@@ -904,6 +913,32 @@ void pg_initialize() {
         Py_DECREF(path_isdir_bool);
         Py_DECREF(path_exists_bool);
         Py_DECREF(ignore_abspath);
+      }
+      // 'time_limit = <time limit in SECONDS>'
+      else if (strcmp(PyString_AsString(lhs_stripped), "time_limit") == 0) {
+        // try to see if it's a valid Python long object
+        PyObject* time_limit_sec_obj =
+          PyLong_FromString(PyString_AsString(rhs_stripped), NULL, 0);
+
+        if (time_limit_sec_obj) {
+          long time_limit_sec = PyLong_AsLong(time_limit_sec_obj);
+          if (time_limit_sec > 0) {
+            // multiply by 1000 to convert to ms ...
+            memoize_time_limit_ms = (unsigned int)time_limit_sec * 1000;
+          }
+          else {
+            fprintf(stderr, "ERROR: Invalid time_limit %ld in incpy.config\n       (must specify a non-negative integer)\n", time_limit_sec);
+            Py_Exit(1);
+          }
+          Py_DECREF(time_limit_sec_obj);
+        }
+        else {
+          assert(PyErr_Occurred());
+          PyErr_Clear();
+          fprintf(stderr, "ERROR: Invalid time_limit '%s' in incpy.config\n       (must specify a non-negative integer)\n", 
+                  PyString_AsString(rhs_stripped));
+          Py_Exit(1);
+        }
       }
 
       Py_DECREF(lhs_stripped);
@@ -963,7 +998,10 @@ void pg_initialize() {
   assert(ignore_paths_lst);
   if (PyList_Size(ignore_paths_lst) > 0) {
     PyObject* tmp_str = PyObject_Repr(ignore_paths_lst);
-    USER_LOG_PRINTF("=== %s START | IGNORE %s\n", time_buf, PyString_AsString(tmp_str));
+    USER_LOG_PRINTF("=== %s START | TIME_LIMIT %u sec | IGNORE %s\n",
+                    time_buf,
+                    memoize_time_limit_ms / 1000,
+                    PyString_AsString(tmp_str));
     Py_DECREF(tmp_str);
   }
   else {
@@ -981,6 +1019,10 @@ void pg_finalize() {
 #ifdef DISABLE_MEMOIZE
   return;
 #endif
+
+  if (!pg_activated) {
+    return;
+  }
 
   // turn this off ASAP so that we don't have to worry about disabling
   // it later temporarily when we're calling cPickle_dump_func, etc.
@@ -1796,12 +1838,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
 
   // don't bother memoizing results of short-running functions
-  // use a short timeout by default, and override it later
-  // if it turns out that this function consistently takes longer to
-  // re-use memoized results than to re-run
-  const long cur_limit_ms = 100;
-
-  if (runtime_ms <= cur_limit_ms) {
+  if (runtime_ms <= memoize_time_limit_ms) {
     // don't forget to clean up!
     goto pg_exit_frame_done;
   }
