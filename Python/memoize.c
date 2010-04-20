@@ -2600,6 +2600,7 @@ void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) 
 
 
 // reading from files
+static void private_FILE_READ_event(PyFileObject* fobj);
 
 void pg_FILE_OPEN_event(PyFileObject* fobj) {
   if (!fobj) return; // could be null for a failure in opening the file
@@ -2674,6 +2675,15 @@ void pg_FILE_OPEN_event(PyFileObject* fobj) {
       f = f->f_back;
     }
   }
+  // if you don't trip up any of the other conditions, then it's safe to
+  // assume that you opened the file in READ mode
+  else {
+    // if you open a file in read mode, add a read dependency on it
+    // RIGHT AWAY, since some functions (e.g., numpy.fromfile) directly
+    // use C library calls to read from the file rather than regular
+    // Python function calls that pg_FILE_READ_event can pick up ...
+    private_FILE_READ_event(fobj);
+  }
 
   MEMOIZE_PUBLIC_END()
 }
@@ -2712,7 +2722,13 @@ Python File objects altogether?
 */
 void pg_FILE_READ_event(PyFileObject* fobj) {
   MEMOIZE_PUBLIC_START()
+  private_FILE_READ_event(fobj);
+  MEMOIZE_PUBLIC_END()
+}
 
+// adds a file read dependency to the top-most NON-IGNORED frame
+// (PRIVATE version, don't call from outside code)
+static void private_FILE_READ_event(PyFileObject* fobj) {
   /* subtle ... if we are ignoring some functions, then we will miss
      file read dependencies that those ignored functions create; one
      hack is to simply find the first non-ignored function and add a
@@ -2724,11 +2740,11 @@ void pg_FILE_READ_event(PyFileObject* fobj) {
   }
 
   if (!top_non_ignored_frame) {
-    goto pg_FILE_READ_event_end;
+    return;
   }
 
   if (!top_non_ignored_frame->func_memo_info) {
-    goto pg_FILE_READ_event_end;
+    return;
   }
 
   assert(fobj && fobj->f_fp);
@@ -2736,7 +2752,7 @@ void pg_FILE_READ_event(PyFileObject* fobj) {
   // we are impure if we read from stdin ...
   if (strcmp(PyString_AsString(fobj->f_name), "<stdin>") == 0) {
     mark_entire_stack_impure("read from stdin");
-    goto pg_FILE_READ_event_end;
+    return;
   }
 
   // lazy initialize
@@ -2752,7 +2768,7 @@ void pg_FILE_READ_event(PyFileObject* fobj) {
   // mutates, then file_read_dependencies will have been cleared by a call
   // to mark_impure() or to clear_cache_and_mark_pure())
   if (PyDict_Contains(file_read_dependencies_dict, fobj->f_name)) {
-    goto pg_FILE_READ_event_end;
+    return;
   }
 
 
@@ -2768,9 +2784,6 @@ void pg_FILE_READ_event(PyFileObject* fobj) {
   // Key: filename, Value: UNIX last modified timestamp
   PyDict_SetItem(file_read_dependencies_dict, fobj->f_name, mtime_obj);
   Py_DECREF(mtime_obj);
-
-pg_FILE_READ_event_end:
-  MEMOIZE_PUBLIC_END()
 }
 
 
