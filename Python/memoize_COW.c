@@ -181,12 +181,19 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
   long addrLong = PyLong_AsLong(obj_addr);
   PyObject* objPtr = (PyObject*)addrLong;
 
+  /* in some crazy cases (e.g., scipy.test()), the reference count is
+     actually 0 because the object referred by obj_addr has already been
+     freed.  let's croak on those cases for now, since i don't feel like
+     diagnosing them yet. */
+  assert(Py_REFCNT(objPtr) > 0);
+
   PyObject* copy = deepcopy(objPtr);
 
   if (!copy) {
     assert(PyErr_Occurred());
-    PyErr_Print();
+    //PyErr_Print();
     PyErr_Clear();
+
     /*
 
   TODO: Bailing out here will leave dangling references to unpicklable
