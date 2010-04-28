@@ -25,9 +25,6 @@ extern "C" {
 #define PYPRINT(obj) do {PyObject_Print(obj, stdout, 0); printf("\n");} while(0)
 
 
-PyFrameObject* top_frame;
-
-
 // initialize in pg_initialize(), destroy in pg_finalize()
 PyObject* all_func_memo_info_dict;
 PyObject* func_name_to_code_dependency;

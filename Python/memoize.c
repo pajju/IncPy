@@ -212,9 +212,6 @@ PyObject* func_name_to_code_dependency = NULL;
    This should be kept in-sync with func_name_to_code_dependency. */
 static PyObject* func_name_to_code_object = NULL;
 
-// the frame object currently at the top of the stack
-PyFrameObject* top_frame = NULL;
-
 
 // A list of paths to ignore for the purposes of tracking code
 // dependencies and impure actions (specified in $HOME/incpy.config)
@@ -734,7 +731,7 @@ static void mark_impure(PyFrameObject* f, char* why) {
 }
 
 static void mark_entire_stack_impure(char* why) {
-  PyFrameObject* f = top_frame;
+  PyFrameObject* f = PyEval_GetFrame();
   while (f) {
     mark_impure(f, why);
     f = f->f_back;
@@ -1436,9 +1433,6 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
 PyObject* pg_enter_frame(PyFrameObject* f) {
   MEMOIZE_PUBLIC_START_RETNULL()
 
-  top_frame = f; // VERYYY important :0
-
-
   // mark entire stack impure when calling Python functions with names
   // matching definitely_impure_funcs
   //
@@ -1451,9 +1445,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     return NULL;
   }
 
-  // if this function's code should be ignored, then return early,
-  // but still update top_frame so that the caller doesn't get
-  // 'blamed' for things that this ignored function does
+  // if this function's code should be ignored, then return early:
   if (f->f_code->pg_ignore) {
     MEMOIZE_PUBLIC_END() // remember these error paths!
     return NULL;
@@ -1499,7 +1491,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
 
   // punt on all impure functions ... we can't memoize their return values
-  // (make sure to still push them into top_frame, though)
   if (f->func_memo_info->is_impure) {
     goto pg_enter_frame_done;
   }
@@ -1685,9 +1676,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     long memo_lookup_time_ms = GET_ELAPSED_MS(f->start_time, skip_endtime);
     assert(memo_lookup_time_ms >= 0);
 
-    // pop le stack ...
-    top_frame = f->f_back;
-
     PG_LOG_PRINTF("dict(event='SKIP_CALL', what='%s', memo_lookup_time_ms='%ld')\n",
                   PyString_AsString(co->pg_canonical_name),
                   memo_lookup_time_ms);
@@ -1766,9 +1754,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   // anything with regards to memoization if this is the case ...
   if (!retval) goto pg_exit_frame_done;
 
-  // sanity checks
-  assert(top_frame == f);
-
   if (f->f_code->pg_ignore) {
     goto pg_exit_frame_done;
   }
@@ -1801,7 +1786,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   /* Optimization: When we execute a LOAD of a global or
      globally-reachable value, we simply add its NAME to
-     top_frame->globals_read_set but NOT a dependency on it.  We defer
+     PyEval_GetFrame()->globals_read_set but NOT a dependency on it.  We defer
      the adding of dependencies until the END of a frame's execution.
    
      Grabbing the global variable values at this time is always safe
@@ -2139,9 +2124,6 @@ pg_exit_frame_done:
 
   Py_XDECREF(stored_args_lst_copy);
 
-  // pop le stack ...
-  top_frame = f->f_back;
-
   MEMOIZE_PUBLIC_END();
 }
 
@@ -2263,6 +2245,8 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
 static void add_global_read_to_top_frame(PyObject* global_container) {
   assert(global_container);
 
+  PyFrameObject* top_frame = PyEval_GetFrame();
+
   // add to the set of globals read by this frame:
   if (top_frame && top_frame->func_memo_info) {
     // Optimization: if global_container is already in
@@ -2301,6 +2285,8 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
   }
 
   MEMOIZE_PUBLIC_START()
+
+  PyFrameObject* top_frame = PyEval_GetFrame();
   assert(top_frame);
 
   PyObject* new_varname = NULL;
@@ -2327,6 +2313,8 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
 // varname is only used for debugging ...
 void pg_STORE_DEL_GLOBAL_event(PyObject *varname) {
   MEMOIZE_PUBLIC_START()
+
+  PyFrameObject* top_frame = PyEval_GetFrame();
 
   // VERY IMPORTANT - if the function on top of the stack is mutating a
   // global and we're ignoring that function, then we should NOT mark
@@ -2442,6 +2430,8 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
 // value, which defeats the whole purpose)
 void pg_about_to_MUTATE_event(PyObject *object) {
   MEMOIZE_PUBLIC_START()
+
+  PyFrameObject* top_frame = PyEval_GetFrame();
 
   // VERY IMPORTANT - if the function on top of the stack is doing some
   // mutation and we're ignoring that function, then we should NOT mark
@@ -2655,7 +2645,7 @@ void pg_FILE_OPEN_event(PyFileObject* fobj) {
     // (the reason why we add to files_written_set is that simply
     // opening the file in pure-write mode does a 'write' to it by
     // truncating the file to zero-length)
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
 
@@ -2694,7 +2684,7 @@ void pg_FILE_CLOSE_event(PyFileObject* fobj) {
   MEMOIZE_PUBLIC_START()
 
   // add to files_closed_set of all frames on the stack
-  PyFrameObject* f = top_frame;
+  PyFrameObject* f = PyEval_GetFrame();
   while (f) {
     if (f->func_memo_info) {
       // lazy initialize set
@@ -2733,7 +2723,7 @@ static void private_FILE_READ_event(PyFileObject* fobj) {
      file read dependencies that those ignored functions create; one
      hack is to simply find the first non-ignored function and add a
      file read dependency there */
-  PyFrameObject* top_non_ignored_frame = top_frame;
+  PyFrameObject* top_non_ignored_frame = PyEval_GetFrame();
   while (top_non_ignored_frame &&
          top_non_ignored_frame->f_code->pg_ignore) {
     top_non_ignored_frame = top_non_ignored_frame->f_back;
@@ -2798,7 +2788,7 @@ void pg_intercept_PyFile_WriteString(const char *s, PyObject *f) {
   if ((PyObject*)f == PySys_GetObject("stdout")) {
     // log output in stdout_cStringIO for ALL frames on the stack ...
 
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
@@ -2813,7 +2803,7 @@ void pg_intercept_PyFile_WriteString(const char *s, PyObject *f) {
   }
   else if ((PyObject*)f == PySys_GetObject("stderr")) {
     // handle stderr in EXACTLY the same way as we handle stdout
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
@@ -2839,7 +2829,7 @@ void pg_intercept_PyFile_WriteObject(PyObject *v, PyObject *f, int flags) {
     // if a frame doesn't have a func_memo_info (e.g., if it's a
     // top-level module or standard library function), then there's 
     // no way we can memoize it, so don't bother tracking it
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
@@ -2854,7 +2844,7 @@ void pg_intercept_PyFile_WriteObject(PyObject *v, PyObject *f, int flags) {
   }
   else if ((PyObject*)f == PySys_GetObject("stderr")) {
     // handle stderr in EXACTLY the same way as we handle stdout
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
@@ -2880,7 +2870,7 @@ void pg_intercept_PyFile_SoftSpace(PyObject *f, int newflag) {
     // if a frame doesn't have a func_memo_info (e.g., if it's a
     // top-level module or standard library function), then there's 
     // no way we can memoize it, so don't bother tracking it
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
@@ -2895,7 +2885,7 @@ void pg_intercept_PyFile_SoftSpace(PyObject *f, int newflag) {
   }
   else if ((PyObject*)f == PySys_GetObject("stderr")) {
     // handle stderr in EXACTLY the same way as we handle stdout
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
@@ -2921,7 +2911,7 @@ void pg_intercept_file_write(PyFileObject *f, PyObject *args) {
     // if a frame doesn't have a func_memo_info (e.g., if it's a
     // top-level module or standard library function), then there's 
     // no way we can memoize it, so don't bother tracking it
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
@@ -2943,7 +2933,7 @@ void pg_intercept_file_write(PyFileObject *f, PyObject *args) {
   }
   else if ((PyObject*)f == PySys_GetObject("stderr")) {
     // handle stderr in EXACTLY the same way as we handle stdout
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
@@ -2972,7 +2962,7 @@ void pg_intercept_file_writelines(PyFileObject *f, PyObject *seq) {
     // if a frame doesn't have a func_memo_info (e.g., if it's a
     // top-level module or standard library function), then there's 
     // no way we can memoize it, so don't bother tracking it
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
@@ -2989,7 +2979,7 @@ void pg_intercept_file_writelines(PyFileObject *f, PyObject *seq) {
   }
   else if ((PyObject*)f == PySys_GetObject("stderr")) {
     // handle stderr in EXACTLY the same way as we handle stdout
-    PyFrameObject* f = top_frame;
+    PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
@@ -3025,7 +3015,7 @@ static void private_FILE_WRITE_event(PyFileObject* fobj) {
   assert(fobj);
 
   // add to files_written_set of all frames on the stack
-  PyFrameObject* f = top_frame;
+  PyFrameObject* f = PyEval_GetFrame();
   while (f) {
     if (f->func_memo_info) {
       // lazy initialize set
