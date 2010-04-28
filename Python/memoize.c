@@ -2304,10 +2304,15 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
 
   MEMOIZE_PUBLIC_START()
 
+  // TODO: why is there no top_frame in some test within numpy.test()?
+  // it might be due to the fact that we have only one copy of
+  // top_frame, so it's not thread-safe
+  /*
   if (!top_frame) {
     MEMOIZE_PUBLIC_END()
     return;
   }
+  */
 
   PyObject* new_varname = NULL;
 
@@ -2451,12 +2456,16 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
 void pg_about_to_MUTATE_event(PyObject *object) {
   MEMOIZE_PUBLIC_START()
 
+  // TODO: why is there no top_frame in some test within numpy.test()?
+  // it might be due to the fact that we have only one copy of
+  // top_frame, so it's not thread-safe
+
   // VERY IMPORTANT - if the function on top of the stack is doing some
   // mutation and we're ignoring that function, then we should NOT mark
   // the entire stack impure.  e.g., standard library functions might
   // mutate some global variables, but they are still 'pure' from the
   // point-of-view of client programs
-  if (!top_frame || top_frame->f_code->pg_ignore) {
+  if (top_frame->f_code->pg_ignore) {
     MEMOIZE_PUBLIC_END() // don't forget me!
     return;
   }
