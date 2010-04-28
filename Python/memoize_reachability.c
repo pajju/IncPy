@@ -42,9 +42,37 @@
    values are contained within.
 
    This cache is implemented as a DICT where the key and value refer to
-   the same object, so we can simply add weak references to it using
-   Py_GLOBAL_CONTAINER_WEAKREF() */
+   the same object, so we can simply add references to it in
+   global_container_dict */
 PyObject* global_containment_intern_cache = NULL;
+
+
+/* Key:   PyLong representing the address of a PyObject
+   Value: PyTuple representing global container of the key PyObject
+
+   (this will work assuming that PyObjects never shift around in memory,
+    which I believe is guaranteed by Include/object.h)
+
+   This should only hold MUTABLE values (see
+   update_global_container for more details on why) */
+PyObject* global_container_dict = NULL;
+
+// TODO: can optimize later if this is too slow due to having to
+// convert to PyLong and using a PyDict to do the look-up:
+PyObject* get_global_container(PyObject* obj) {
+  // we will hash the object's address, NOT the object itself ...
+  PyObject* myAddr = PyLong_FromLong((long)obj);
+  PyObject* ret = PyDict_GetItem(global_container_dict, myAddr);
+  Py_DECREF(myAddr);
+  return ret;
+}
+
+void set_global_container(PyObject* obj, PyObject* global_container) {
+  // we will hash the object's address, NOT the object itself ...
+  PyObject* myAddr = PyLong_FromLong((long)obj);
+  PyDict_SetItem(global_container_dict, myAddr, global_container);
+  Py_DECREF(myAddr);
+}
 
 
 /* Looks up the value of a global variable using cur_frame as a starting
@@ -198,14 +226,14 @@ PyObject* create_varname_tuple(PyObject* filename, PyObject* varname) {
 }
 
 // assuming parent is a globally-reachable object, return a NEW global 
-// var tuple suitable for assignment to Py_GLOBAL_CONTAINER_WEAKREF,
-// formed by extending each elt. of Py_GLOBAL_CONTAINER_WEAKREF(parent)
+// var tuple suitable for assignment to global_container_dict,
+// formed by extending each elt. of get_global_container(parent)
 // with attrname (also implements interning optimization)
 //
 // this does NOT increment refcount of the newly-created value, since
 // it uses interning optimization.  caller does NOT have to decref
 PyObject* extend_with_attrname(PyObject* parent, PyObject* attrname) {
-  PyObject* parent_container = Py_GLOBAL_CONTAINER_WEAKREF(parent);
+  PyObject* parent_container = get_global_container(parent);
   assert(parent_container && PyTuple_CheckExact(parent_container));
 
   PyObject* result = extend_tuple(parent_container, attrname);
@@ -222,28 +250,24 @@ PyObject* extend_with_attrname(PyObject* parent, PyObject* attrname) {
 }
 
 
-/* obj contains a field called ob_global_container, which is accessible
-   through the Py_GLOBAL_CONTAINER_WEAKREF macro.  new_elt is a tuple
-   representing a global variable name.
-
-   if obj does not already have a Py_GLOBAL_CONTAINER_WEAKREF, then
+/* if obj does not already have an entry in global_container_dict, then
    point it to new_elt.  if it already has one, then DO NOTHING!  (see
    the 'Optimization' note at the top of this file for why we do this)
 
-   WE ONLY DO THIS FOR IMMUTABLE OBJECTS! */
-void update_global_container_weakref(PyObject* obj, PyObject* new_elt) {
+   WE ONLY DO THIS FOR MUTABLE OBJECTS! */
+void update_global_container(PyObject* obj, PyObject* new_elt) {
   // VERY IMPORTANT but subtle point - immutable values might be
   // interned by the Python interpreter implementation (e.g., small
-  // integers are interned), so we don't want to taint them by setting
-  // their Py_GLOBAL_CONTAINER_WEAKREF fields
+  // integers are interned), so we don't want to taint them by adding
+  // them to global_container_dict
   if (DEFINITELY_IMMUTABLE(obj)) {
     return;
   }
 
-  PyObject* cur_container = Py_GLOBAL_CONTAINER_WEAKREF(obj);
+  PyObject* cur_container = get_global_container(obj);
 
   if (!cur_container) {
-    Py_GLOBAL_CONTAINER_WEAKREF(obj) = new_elt;
+    set_global_container(obj, new_elt);
   }
 }
 
@@ -267,10 +291,15 @@ int contains_externally_aliased_mutable_obj(PyObject* obj, PyFrameObject* f) {
   // so those are actually created BEFORE a function is called but
   // are harmless since they can't contain mutable items inside.
   if (!PyTuple_CheckExact(obj)) {
+    // STINT - I don't yet support Py_CREATION_TIME in this branch ...
+
+    /*
     // only do the time check on MUTABLE items
     if (Py_CREATION_TIME(obj) < f->start_instr_time) {
       return 1;
     }
+    */
+    return 0;
   }
 
   // otherwise recurse inside of yourself to get your constituent

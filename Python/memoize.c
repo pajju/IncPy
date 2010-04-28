@@ -964,6 +964,7 @@ void pg_initialize() {
 
   // global data structures:
   global_containment_intern_cache = PyDict_New();
+  global_container_dict = PyDict_New();
   func_name_to_code_dependency = PyDict_New();
   func_name_to_code_object = PyDict_New();
   all_func_memo_info_dict = PyDict_New();
@@ -1140,6 +1141,7 @@ void pg_finalize() {
   Py_CLEAR(all_func_memo_info_dict);
 
   Py_CLEAR(global_containment_intern_cache);
+  Py_CLEAR(global_container_dict);
   Py_CLEAR(func_name_to_code_dependency);
   Py_CLEAR(func_name_to_code_object);
   Py_CLEAR(cow_containment_dict);
@@ -2301,7 +2303,11 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
   }
 
   MEMOIZE_PUBLIC_START()
-  assert(top_frame);
+
+  if (!top_frame) {
+    MEMOIZE_PUBLIC_END()
+    return;
+  }
 
   PyObject* new_varname = NULL;
 
@@ -2319,7 +2325,7 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
   }
   assert(new_varname);
 
-  update_global_container_weakref(value, new_varname);
+  update_global_container(value, new_varname);
 
   MEMOIZE_PUBLIC_END()
 }
@@ -2333,7 +2339,7 @@ void pg_STORE_DEL_GLOBAL_event(PyObject *varname) {
   // the entire stack impure.  e.g., standard library functions might
   // mutate some global variables, but they are still 'pure' from the
   // point-of-view of client programs
-  if (top_frame->f_code->pg_ignore) {
+  if (!top_frame || top_frame->f_code->pg_ignore) {
     MEMOIZE_PUBLIC_END() // don't forget me!
     return;
   }
@@ -2373,7 +2379,8 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value) {
 
   MEMOIZE_PUBLIC_START()
 
-  if (IS_GLOBALLY_REACHABLE(object)) {
+  PyObject* global_container = get_global_container(object);
+  if (global_container) {
     // If object is a MODULE, then we need to add a more detailed
     // record not just using the module name, but also attach attrname
     // (which is the name of the variable within the module)
@@ -2392,11 +2399,11 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value) {
         add_global_read_to_top_frame(new_varname);
       }
 
-      update_global_container_weakref(value, new_varname);
+      update_global_container(value, new_varname);
     }
     else {
       // extend global reachability to value
-      update_global_container_weakref(value, Py_GLOBAL_CONTAINER_WEAKREF(object));
+      update_global_container(value, global_container);
     }
   }
 
@@ -2423,8 +2430,9 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
   MEMOIZE_PUBLIC_START()
 
   // extend global reachability to res
-  if (IS_GLOBALLY_REACHABLE(obj)) {
-    update_global_container_weakref(res, Py_GLOBAL_CONTAINER_WEAKREF(obj));
+  PyObject* global_container = get_global_container(obj);
+  if (global_container) {
+    update_global_container(res, global_container);
   }
 
   MEMOIZE_PUBLIC_END()
@@ -2448,7 +2456,7 @@ void pg_about_to_MUTATE_event(PyObject *object) {
   // the entire stack impure.  e.g., standard library functions might
   // mutate some global variables, but they are still 'pure' from the
   // point-of-view of client programs
-  if (top_frame->f_code->pg_ignore) {
+  if (!top_frame || top_frame->f_code->pg_ignore) {
     MEMOIZE_PUBLIC_END() // don't forget me!
     return;
   }
@@ -2456,16 +2464,18 @@ void pg_about_to_MUTATE_event(PyObject *object) {
 
   // OPTIMIZATION: simply checking for global reachability is really
   // fast, so do this as the first check (most common case) ...
-  if (IS_GLOBALLY_REACHABLE(object)) {
-    PyObject* global_container = Py_GLOBAL_CONTAINER_WEAKREF(object);
-
+  //
+  // TODO: I dunno how fast it is now that we need to do a hashtable
+  // look-up rather than a simple field look-up
+  PyObject* global_container = get_global_container(object);
+  if (global_container) {
     /* SUPER HACK: ignore mutations to global variables defined in files
        whose code we want to ignore (e.g., standard library code)
        Although technically this isn't correct, it's a cheap workaround
        for the fact that some libraries (like re.py) implement global
        caches (see _cache dict in re.py) and actually mutate them when
        doing otherwise pure operations. */
-    assert(global_container && PyTuple_CheckExact(global_container));
+    assert(PyTuple_CheckExact(global_container));
     if (strcmp(PyString_AsString(PyTuple_GET_ITEM(global_container, 0)),
                "IGNORE") == 0) {
       MEMOIZE_PUBLIC_END()
@@ -2475,6 +2485,9 @@ void pg_about_to_MUTATE_event(PyObject *object) {
     mark_entire_stack_impure("mutate global");
   }
   else {
+    // STINT - I don't yet support Py_CREATION_TIME in this branch ...
+
+    /*
     // then fall back on the more general check, which picks up
     // mutations of function arguments as well:
 
@@ -2497,6 +2510,7 @@ void pg_about_to_MUTATE_event(PyObject *object) {
       }
       f = f->f_back;
     }
+    */
   }
 
 #ifdef ENABLE_COW

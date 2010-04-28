@@ -37,21 +37,19 @@ extern "C" {
    PyFile_CheckExact(obj))
 
 
-// Py_GLOBAL_CONTAINER_WEAKREF is defined in Include/object.h
-#define IS_GLOBALLY_REACHABLE(obj) (Py_GLOBAL_CONTAINER_WEAKREF(obj) != NULL)
-
-
 PyObject* find_globally_reachable_obj_by_name(PyObject* varname_tuple,
                                               PyFrameObject* cur_frame);
 
 PyObject* create_varname_tuple(PyObject* filename, PyObject* varname);
 PyObject* extend_with_attrname(PyObject* parent, PyObject* attrname);
-void update_global_container_weakref(PyObject* obj, PyObject* new_elt);
+void update_global_container(PyObject* obj, PyObject* new_elt);
+PyObject* get_global_container(PyObject* obj);
 
 int contains_externally_aliased_mutable_obj(PyObject* obj, PyFrameObject* f);
 
 // initialize in pg_initialize(), destroy in pg_finalize()
 PyObject* global_containment_intern_cache;
+PyObject* global_container_dict;
 
 
 #ifdef __cplusplus

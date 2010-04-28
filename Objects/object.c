@@ -2182,9 +2182,6 @@ _Py_ReadyTypes(void)
 #ifdef Py_TRACE_REFS
 
 
-/* pgbovine - initialize the extra fields I added
-   (remember the other version for !Py_TRACE_REFS in Include/object.h) */
-extern unsigned long long int num_executed_instrs; // defined in Python/ceval.c
 void
 _Py_NewReference(PyObject *op)
 {
@@ -2192,8 +2189,6 @@ _Py_NewReference(PyObject *op)
 	op->ob_refcnt = 1;
 	_Py_AddToAllObjects(op, 1);
 	_Py_INC_TPALLOCS(op);
-  op->ob_creation_time = num_executed_instrs; // pgbovine
-  op->ob_global_container = NULL; // pgbovine
 }
 
 void
