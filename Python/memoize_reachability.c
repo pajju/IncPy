@@ -42,49 +42,9 @@
    values are contained within.
 
    This cache is implemented as a DICT where the key and value refer to
-   the same object, so we can simply add references to it in
-   global_container_dict */
+   the same object, so we can simply add WEAK references to it in
+   obj_metadata_map.contents[].global_container */
 PyObject* global_containment_intern_cache = NULL;
-
-
-/* Key:   PyLong representing the address of a PyObject
-   Value: PyTuple representing global container of the key PyObject
-
-   (this will work assuming that PyObjects never shift around in memory,
-    which I believe is guaranteed by Include/object.h)
-
-   This should only hold MUTABLE values (see
-   update_global_container for more details on why) */
-PyObject* global_container_dict = NULL;
-// guard global_container_dict with a bloom filter to speed up lookups:
-BLOOM* global_container_dict_keys_filter = NULL;
-
-
-PyObject* get_global_container(PyObject* obj) {
-  /* Optimization: check the bloom filter first to avoid constructing a
-     PyLong and doing a full dict lookup.  note that if a false positive
-     occurs, then that's okay because the real PyDict_GetItem lookup
-     will always give the right answer: */
-  if (!bloom_check(global_container_dict_keys_filter, (void*)obj)) {
-    return NULL;
-  }
-
-  // we will hash the object's address, NOT the object itself ...
-  PyObject* myAddr = PyLong_FromLong((long)obj);
-  PyObject* ret = PyDict_GetItem(global_container_dict, myAddr);
-  Py_DECREF(myAddr);
-  return ret;
-}
-
-void set_global_container(PyObject* obj, PyObject* global_container) {
-  // we will hash the object's address, NOT the object itself ...
-  PyObject* myAddr = PyLong_FromLong((long)obj);
-  PyDict_SetItem(global_container_dict, myAddr, global_container);
-  Py_DECREF(myAddr);
-
-  // don't forget to add to bloom filter:
-  bloom_add(global_container_dict_keys_filter, (void*)obj);
-}
 
 
 /* Looks up the value of a global variable using cur_frame as a starting
@@ -238,7 +198,7 @@ PyObject* create_varname_tuple(PyObject* filename, PyObject* varname) {
 }
 
 // assuming parent is a globally-reachable object, return a NEW global 
-// var tuple suitable for assignment to global_container_dict,
+// var tuple suitable for assignment to global_container_weakref,
 // formed by extending each elt. of get_global_container(parent)
 // with attrname (also implements interning optimization)
 //
@@ -262,7 +222,7 @@ PyObject* extend_with_attrname(PyObject* parent, PyObject* attrname) {
 }
 
 
-/* if obj does not already have an entry in global_container_dict, then
+/* if obj does not already have a global_container_weakref, then
    point it to new_elt.  if it already has one, then DO NOTHING!  (see
    the 'Optimization' note at the top of this file for why we do this)
 
@@ -271,7 +231,7 @@ void update_global_container(PyObject* obj, PyObject* new_elt) {
   // VERY IMPORTANT but subtle point - immutable values might be
   // interned by the Python interpreter implementation (e.g., small
   // integers are interned), so we don't want to taint them by adding
-  // them to global_container_dict
+  // a global_container_weakref
   if (DEFINITELY_IMMUTABLE(obj)) {
     return;
   }

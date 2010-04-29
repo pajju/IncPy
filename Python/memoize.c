@@ -295,15 +295,41 @@ static void init_definitely_impure_funcs(void);
 
 obj_metadata_map** level_1_map = NULL;
 
-/*
 void set_global_container(PyObject* obj, PyObject* global_container) {
+  if (!level_1_map) {
+    return;
+  }
 
+  assert(global_container);
+
+  UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
+  UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
+
+  if (!level_1_map[msb16]) {
+    level_1_map[msb16] = PyMem_New(obj_metadata_map, 1);
+    memset(level_1_map[msb16], 0, sizeof(obj_metadata_map));
+    //printf("NEW MAP msb=%u, size=%u\n", msb16, sizeof(obj_metadata_map));
+  }
+
+  level_1_map[msb16]->contents[lsb16].global_container_weakref = global_container;
 }
 
 PyObject* get_global_container(PyObject* obj) {
-  return NULL;
+  if (!level_1_map) {
+    return NULL;
+  }
+
+  UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
+  UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
+
+  if (!level_1_map[msb16]) {
+    return NULL;
+  }
+  else {
+    return level_1_map[msb16]->contents[lsb16].global_container_weakref;
+  }
 }
-*/
+
 
 void set_creation_time(PyObject* obj, unsigned int creation_time) {
   if (!level_1_map) {
@@ -321,8 +347,7 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
   if (!level_1_map[msb16]) {
     level_1_map[msb16] = PyMem_New(obj_metadata_map, 1);
     memset(level_1_map[msb16], 0, sizeof(obj_metadata_map));
-    //printf("set_creation_time NEW MAP msb=%u, size=%u\n",
-    //       msb16, sizeof(obj_metadata_map));
+    //printf("NEW MAP msb=%u, size=%u\n", msb16, sizeof(obj_metadata_map));
   }
 
   level_1_map[msb16]->contents[lsb16].creation_time = creation_time;
@@ -330,7 +355,7 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
   //printf("set_creation_time %u\n", creation_time);
 
   // sanity check - comment out for speed:
-  assert(get_creation_time(obj) == creation_time);
+  //assert(get_creation_time(obj) == creation_time);
 }
 
 // return 0 if not found (earliest possible creation time)
@@ -1112,17 +1137,11 @@ void pg_initialize() {
 
   // global data structures:
   global_containment_intern_cache = PyDict_New();
-  global_container_dict = PyDict_New();
   func_name_to_code_dependency = PyDict_New();
   func_name_to_code_object = PyDict_New();
   all_func_memo_info_dict = PyDict_New();
   cow_containment_dict = PyDict_New();
   cow_traced_addresses_set = PySet_New(NULL);
-
-
-  extern BLOOM* global_container_dict_keys_filter;
-  // a good heuristic is to make 'size' be a prime number
-  global_container_dict_keys_filter = bloom_create(997);
 
 
   // this file should be small, so start-up time should be fast!
@@ -1294,15 +1313,11 @@ void pg_finalize() {
   Py_CLEAR(all_func_memo_info_dict);
 
   Py_CLEAR(global_containment_intern_cache);
-  Py_CLEAR(global_container_dict);
   Py_CLEAR(func_name_to_code_dependency);
   Py_CLEAR(func_name_to_code_object);
   Py_CLEAR(cow_containment_dict);
   Py_CLEAR(cow_traced_addresses_set);
   Py_CLEAR(ignore_paths_lst);
-
-  extern BLOOM* global_container_dict_keys_filter;
-  bloom_destroy(global_container_dict_keys_filter);
 
   // function pointers
   Py_CLEAR(deepcopy_func);

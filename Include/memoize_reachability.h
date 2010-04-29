@@ -49,7 +49,6 @@ int contains_externally_aliased_mutable_obj(PyObject* obj, PyFrameObject* f);
 
 // initialize in pg_initialize(), destroy in pg_finalize()
 PyObject* global_containment_intern_cache;
-PyObject* global_container_dict;
 
 
 #ifdef __cplusplus
