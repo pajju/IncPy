@@ -56,10 +56,19 @@ PyObject* global_containment_intern_cache = NULL;
    This should only hold MUTABLE values (see
    update_global_container for more details on why) */
 PyObject* global_container_dict = NULL;
+// guard global_container_dict with a bloom filter to speed up lookups:
+BLOOM* global_container_dict_keys_filter = NULL;
 
-// TODO: can optimize later if this is too slow due to having to
-// convert to PyLong and using a PyDict to do the look-up:
+
 PyObject* get_global_container(PyObject* obj) {
+  /* Optimization: check the bloom filter first to avoid constructing a
+     PyLong and doing a full dict lookup.  note that if a false positive
+     occurs, then that's okay because the real PyDict_GetItem lookup
+     will always give the right answer: */
+  if (!bloom_check(global_container_dict_keys_filter, (void*)obj)) {
+    return NULL;
+  }
+
   // we will hash the object's address, NOT the object itself ...
   PyObject* myAddr = PyLong_FromLong((long)obj);
   PyObject* ret = PyDict_GetItem(global_container_dict, myAddr);
@@ -72,6 +81,9 @@ void set_global_container(PyObject* obj, PyObject* global_container) {
   PyObject* myAddr = PyLong_FromLong((long)obj);
   PyDict_SetItem(global_container_dict, myAddr, global_container);
   Py_DECREF(myAddr);
+
+  // don't forget to add to bloom filter:
+  bloom_add(global_container_dict_keys_filter, (void*)obj);
 }
 
 

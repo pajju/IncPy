@@ -155,6 +155,28 @@ void set_creation_time(PyObject* obj, unsigned int creation_time);
 unsigned int get_creation_time(PyObject* obj);
 
 
+// simple bloom filter, adapted from:
+//   http://en.literateprograms.org/Bloom_filter_%28C%29
+typedef struct {
+  unsigned int asize;
+  unsigned char* a;
+} BLOOM;
+
+BLOOM* bloom_create(unsigned int size);
+void bloom_destroy(BLOOM* bloom);
+void bloom_add(BLOOM* bloom, void* addr);
+int bloom_check(BLOOM* bloom, void* addr);
+
+#define SETBIT(a, n) (a[n/CHAR_BIT] |= (1<<(n%CHAR_BIT)))
+#define GETBIT(a, n) (a[n/CHAR_BIT] & (1<<(n%CHAR_BIT)))
+
+// some simple hash functions for void* pointers:
+//
+// identify function, accounting for word alignment:
+#define HASH1(n) (((unsigned int)n) / sizeof(void*))
+// Knuth's multiplicative method:
+#define HASH2(n) (((unsigned int)n) * 2654435761)
+
 
 #ifdef __cplusplus
 }
