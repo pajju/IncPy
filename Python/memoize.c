@@ -1609,8 +1609,6 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
 PyObject* pg_enter_frame(PyFrameObject* f) {
   MEMOIZE_PUBLIC_START_RETNULL()
 
-  num_executed_func_calls++; // TODO: is this the right place to put this?
-
   // mark entire stack impure when calling Python functions with names
   // matching definitely_impure_funcs
   //
@@ -1630,6 +1628,11 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   }
 
   BEGIN_TIMING(f->start_time);
+
+  // TODO: is this the right place to put this?  I gotta put it before
+  // setting f->start_func_call_time, but should I also count ignored
+  // functions or not?
+  num_executed_func_calls++;
 
   f->start_func_call_time = num_executed_func_calls;
 
