@@ -145,6 +145,8 @@ typedef struct {
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
 
+// TODO: implement me!!!
+
 #else
 // 32-bit architecture
 

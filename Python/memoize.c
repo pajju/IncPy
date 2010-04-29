@@ -288,6 +288,8 @@ static void init_definitely_impure_funcs(void);
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
 
+// TODO: implement me!!!
+
 #else
 // 32-bit architecture
 
@@ -879,9 +881,18 @@ void pg_initialize() {
 // initialize zero out maps:
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
+  if (sizeof(void*) != 8) {
+    fprintf(stderr, "ERROR: void* isn't 64 bits.\n");
+    Py_Exit(1);
+  }
 
 #else
 // 32-bit architecture
+  if (sizeof(void*) != 4) {
+    fprintf(stderr, "ERROR: void* isn't 32 bits.\n");
+    Py_Exit(1);
+  }
+
   level_1_map = PyMem_New(obj_metadata_map*, METADATA_MAP_SIZE);
   memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
   //printf("sizeof(level_1_map): %lu\n", sizeof(*level_1_map) * METADATA_MAP_SIZE);
@@ -1583,8 +1594,7 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
 PyObject* pg_enter_frame(PyFrameObject* f) {
   MEMOIZE_PUBLIC_START_RETNULL()
 
-  // TODO: is this the right place to put this?
-  num_executed_func_calls++;
+  num_executed_func_calls++; // TODO: is this the right place to put this?
 
   // mark entire stack impure when calling Python functions with names
   // matching definitely_impure_funcs
