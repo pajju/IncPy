@@ -283,6 +283,36 @@ static void init_self_mutator_c_methods(void);
 static void init_definitely_impure_funcs(void);
 
 
+// efficient multi-level mapping of PyObject addresses to metadata
+#ifdef HOST_IS_64BIT
+// 64-bit architecture
+
+#else
+// 32-bit architecture
+
+/*
+void set_global_container(PyObject* obj, PyObject* global_container) {
+
+}
+
+PyObject* get_global_container(PyObject* obj) {
+  return NULL;
+}
+*/
+
+void set_creation_time(PyObject* obj, unsigned int creation_time) {
+  (unsigned int)obj >> 16;
+}
+
+// return 0 if not found (earliest possible creation time)
+unsigned int get_creation_time(PyObject* obj) {
+  return 0;
+}
+
+#endif
+
+
+
 // make a deep copy of obj and return it as a new reference
 // (returns NULL on error)
 PyObject* deepcopy(PyObject* obj) {
@@ -741,6 +771,12 @@ static void mark_entire_stack_impure(char* why) {
 
 // called at the beginning of execution
 void pg_initialize() {
+  if ((sizeof(UInt32) != 4) ||
+      (sizeof(UInt64) != 8)) {
+    fprintf(stderr, "ERROR: UInt32 and UInt64 types have the wrong sizes.\n");
+    Py_Exit(1);
+  }
+
 #ifdef DISABLE_MEMOIZE
   return;
 #endif

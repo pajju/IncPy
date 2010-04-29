@@ -97,6 +97,65 @@ void pg_intercept_file_truncate(PyFileObject *f, PyObject *args);
 int pg_ignore_code(PyCodeObject* co);
 PyObject* pg_create_canonical_code_name(PyCodeObject* co);
 
+
+/* check for word size
+
+   stolen from Valgrind: valgrind-3.5.0/VEX/pub/libvex_basictypes.h */
+
+/* The following 4 work OK for Linux. */
+#if defined(__x86_64__)
+#   define HOST_WORDSIZE 8
+#elif defined(__i386__)
+#   define HOST_WORDSIZE 4
+#elif defined(__powerpc__) && defined(__powerpc64__)
+#   define HOST_WORDSIZE 8
+#elif defined(__powerpc__) && !defined(__powerpc64__)
+#   define HOST_WORDSIZE 4
+
+#elif defined(_AIX) && !defined(__64BIT__)
+#   define HOST_WORDSIZE 4
+#elif defined(_AIX) && defined(__64BIT__)
+#   define HOST_WORDSIZE 8
+
+#else
+#   error "Fatal IncPy error: Can't establish the host architecture"
+#endif
+
+#if HOST_WORDSIZE == 8
+#   define HOST_IS_64BIT
+#endif
+
+// check their sizes in pg_initialize():
+typedef  unsigned int    UInt32;
+typedef  unsigned long long int   UInt64;
+
+#define METADATA_MAP_SIZE 65536 // 16 bits
+#define METADATA_MAP_MASK (SM_SIZE-1)
+
+// efficient multi-level mapping of PyObject addresses to metadata
+typedef struct {
+  struct {
+    unsigned int creation_time; // measured in number of elapsed function calls
+    PyObject* global_container;
+  } contents[METADATA_MAP_SIZE];
+} obj_metadata_map;
+
+#ifdef HOST_IS_64BIT
+// 64-bit architecture
+
+#else
+// 32-bit architecture
+obj_metadata_map* level_1_map[METADATA_MAP_SIZE];
+#endif
+
+void set_global_container(PyObject* obj, PyObject* global_container);
+PyObject* get_global_container(PyObject* obj);
+
+void set_creation_time(PyObject* obj, unsigned int creation_time);
+unsigned int get_creation_time(PyObject* obj);
+
+
+
 #ifdef __cplusplus
 }
 #endif
