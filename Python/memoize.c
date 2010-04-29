@@ -283,6 +283,61 @@ static void init_self_mutator_c_methods(void);
 static void init_definitely_impure_funcs(void);
 
 
+// simple bloom filter, adapted from:
+//   http://en.literateprograms.org/Bloom_filter_%28C%29
+
+// a good heuristic is to make 'size' be a prime number
+BLOOM* bloom_create(size_t size) {
+  BLOOM* bloom;
+
+  if (!(bloom=PyMem_New(BLOOM, 1))) return NULL;
+
+  if (!(bloom->a=PyMem_New(char, (size+CHAR_BIT-1)/CHAR_BIT))) {
+    PyMem_Del(bloom);
+    return NULL;
+  }
+  else {
+    memset(bloom->a, 0, sizeof(char) * ((size+CHAR_BIT-1)/CHAR_BIT));
+  }
+
+  bloom->asize=size;
+  return bloom;
+}
+
+void bloom_destroy(BLOOM* bloom) {
+  PyMem_Del(bloom->a);
+  PyMem_Del(bloom);
+}
+
+void bloom_add(BLOOM* bloom, void* addr) {
+  /*
+  printf("bloom_add %u %u %u\n",
+         (unsigned int) addr,
+         HASH1(addr) % bloom->asize,
+         HASH2(addr) % bloom->asize);
+  */
+
+  SETBIT(bloom->a, HASH1(addr) % bloom->asize);
+  SETBIT(bloom->a, HASH2(addr) % bloom->asize);
+}
+
+int bloom_check(BLOOM* bloom, void* addr) {
+  /*
+  printf("bloom_check %u %u %u\n",
+         (unsigned int) addr,
+         HASH1(addr) % bloom->asize,
+         HASH2(addr) % bloom->asize);
+  */
+
+  if(!(GETBIT(bloom->a, HASH1(addr) % bloom->asize))) return 0;
+  if(!(GETBIT(bloom->a, HASH2(addr) % bloom->asize))) return 0;
+  return 1;
+}
+
+
+
+
+
 // make a deep copy of obj and return it as a new reference
 // (returns NULL on error)
 PyObject* deepcopy(PyObject* obj) {
@@ -969,6 +1024,11 @@ void pg_initialize() {
   cow_traced_addresses_set = PySet_New(NULL);
 
 
+  extern BLOOM* global_container_dict_keys_filter;
+  // a good heuristic is to make 'size' be a prime number
+  global_container_dict_keys_filter = bloom_create(997);
+
+
   // this file should be small, so start-up time should be fast!
   PyObject* pf = PyFile_FromString("incpy-cache/filenames.pickle", "r");
   if (pf) {
@@ -1144,6 +1204,9 @@ void pg_finalize() {
   Py_CLEAR(cow_containment_dict);
   Py_CLEAR(cow_traced_addresses_set);
   Py_CLEAR(ignore_paths_lst);
+
+  extern BLOOM* global_container_dict_keys_filter;
+  bloom_destroy(global_container_dict_keys_filter);
 
   // function pointers
   Py_CLEAR(deepcopy_func);
