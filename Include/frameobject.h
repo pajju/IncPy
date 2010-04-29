@@ -84,8 +84,8 @@ typedef struct _frame {
     struct timeval end_time;
 
     // the 'time' when this frame started executing
-    // (measured in num_executed_instrs)
-    unsigned long long int start_instr_time;
+    // (measured in num_executed_func_calls)
+    unsigned int start_func_call_time;
 
     // cStringIO objects representing stdout and stderr output
     // printed by this invocation of f or any of its callees

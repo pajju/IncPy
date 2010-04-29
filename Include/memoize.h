@@ -126,11 +126,12 @@ PyObject* pg_create_canonical_code_name(PyCodeObject* co);
 #endif
 
 // check their sizes in pg_initialize():
-typedef  unsigned int    UInt32;
-typedef  unsigned long long int   UInt64;
+typedef unsigned short          UInt16;
+typedef unsigned int            UInt32;
+typedef unsigned long long int  UInt64;
 
 #define METADATA_MAP_SIZE 65536 // 16 bits
-#define METADATA_MAP_MASK (SM_SIZE-1)
+#define METADATA_MAP_MASK (METADATA_MAP_SIZE-1)
 
 // efficient multi-level mapping of PyObject addresses to metadata
 typedef struct {
@@ -140,12 +141,15 @@ typedef struct {
   } contents[METADATA_MAP_SIZE];
 } obj_metadata_map;
 
+// allocate and zero out in pg_initialize():
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
 
 #else
 // 32-bit architecture
-obj_metadata_map* level_1_map[METADATA_MAP_SIZE];
+
+// initialize to an array of METADATA_MAP_SIZE:
+obj_metadata_map** level_1_map;
 #endif
 
 void set_global_container(PyObject* obj, PyObject* global_container);

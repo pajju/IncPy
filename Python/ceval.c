@@ -18,7 +18,6 @@
 #include "structmember.h"
 
 #include "memoize.h" /* pgbovine */
-unsigned long long int num_executed_instrs = 0; /* pgbovine - needs to be BIG to prevent overflows */
 
 #include <ctype.h>
 
@@ -956,9 +955,6 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 		opcode = NEXTOP();
 		oparg = 0;   /* allows oparg to be stored in a register because
 			it doesn't have to be remembered across a full loop */
-
-    // pgbovine - increment 'time' whenever you extract the next opcode
-    num_executed_instrs++;
 
 		if (HAS_ARG(opcode))
 			oparg = NEXTARG();

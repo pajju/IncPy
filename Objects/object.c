@@ -2186,6 +2186,9 @@ void
 _Py_NewReference(PyObject *op)
 {
 	_Py_INC_REFTOTAL;
+  // pgbovine - don't forget to also set macro in Include/object.h
+  extern unsigned int num_executed_func_calls;
+	set_creation_time(op, num_executed_func_calls);
 	op->ob_refcnt = 1;
 	_Py_AddToAllObjects(op, 1);
 	_Py_INC_TPALLOCS(op);

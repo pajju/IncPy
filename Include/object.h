@@ -729,9 +729,12 @@ PyAPI_FUNC(void) _Py_AddToAllObjects(PyObject *, int force);
 /* Without Py_TRACE_REFS, there's little enough to do that we expand code
  * inline.
  */
+// pgbovine - don't forget to also do set_creation_time in Objects/object.c
+extern unsigned int num_executed_func_calls;
 #define _Py_NewReference(op) (				\
 	_Py_INC_TPALLOCS(op) _Py_COUNT_ALLOCS_COMMA	\
 	_Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA		\
+	set_creation_time(op, num_executed_func_calls) _Py_REF_DEBUG_COMMA		\
 	Py_REFCNT(op) = 1)
 
 #define _Py_ForgetReference(op) _Py_INC_TPFREES(op)

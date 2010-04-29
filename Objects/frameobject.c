@@ -718,7 +718,7 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
   f->start_time.tv_usec = 0;
   f->end_time.tv_sec = 0;
   f->end_time.tv_usec = 0;
-  f->start_instr_time = 0;
+  f->start_func_call_time = 0;
   f->stdout_cStringIO = NULL;
   f->stderr_cStringIO = NULL;
   f->files_opened_w_set = NULL;

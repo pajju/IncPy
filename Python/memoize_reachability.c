@@ -303,15 +303,10 @@ int contains_externally_aliased_mutable_obj(PyObject* obj, PyFrameObject* f) {
   // so those are actually created BEFORE a function is called but
   // are harmless since they can't contain mutable items inside.
   if (!PyTuple_CheckExact(obj)) {
-    // STINT - I don't yet support Py_CREATION_TIME in this branch ...
-
-    /*
     // only do the time check on MUTABLE items
-    if (Py_CREATION_TIME(obj) < f->start_instr_time) {
+    if (get_creation_time(obj) < f->start_func_call_time) {
       return 1;
     }
-    */
-    return 0;
   }
 
   // otherwise recurse inside of yourself to get your constituent

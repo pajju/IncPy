@@ -50,8 +50,8 @@ typedef struct {
   // dependencies by are_dependencies_satisfied(), used to prevent
   // infinite loops
   //
-  // has the same units as 'num_executed_instrs'
-  unsigned long long int last_dep_check_instr_time;
+  // has the same units as 'num_executed_func_calls'
+  unsigned int last_dep_check_func_call_time;
 
   // booleans
   char do_writeback; // Optimization: should we write back this entry to disk?

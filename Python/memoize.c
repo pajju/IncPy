@@ -156,8 +156,9 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
 // to shut gcc up ...
 extern time_t PyOS_GetLastModificationTime(char *, FILE *);
 
-// our notion of 'time' within an execution, defined in ceval.c
-extern unsigned long long int num_executed_instrs;
+// our notion of 'time' within an execution, measured by number of
+// elapsed function calls:
+unsigned int num_executed_func_calls = 0;
 
 // from memoize_fmi.c
 extern FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod);
@@ -290,6 +291,8 @@ static void init_definitely_impure_funcs(void);
 #else
 // 32-bit architecture
 
+obj_metadata_map** level_1_map = NULL;
+
 /*
 void set_global_container(PyObject* obj, PyObject* global_container) {
 
@@ -301,12 +304,48 @@ PyObject* get_global_container(PyObject* obj) {
 */
 
 void set_creation_time(PyObject* obj, unsigned int creation_time) {
-  (unsigned int)obj >> 16;
+  if (!level_1_map) {
+    return;
+  }
+
+  // fast-path ... don't do anything when creation_time is 0!
+  if (creation_time == 0) {
+    return;
+  }
+
+  UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
+  UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
+
+  if (!level_1_map[msb16]) {
+    level_1_map[msb16] = PyMem_New(obj_metadata_map, 1);
+    memset(level_1_map[msb16], 0, sizeof(obj_metadata_map));
+    //printf("set_creation_time NEW MAP msb=%u, size=%u\n",
+    //       msb16, sizeof(obj_metadata_map));
+  }
+
+  level_1_map[msb16]->contents[lsb16].creation_time = creation_time;
+
+  //printf("set_creation_time %u\n", creation_time);
+
+  // sanity check - comment out for speed:
+  assert(get_creation_time(obj) == creation_time);
 }
 
 // return 0 if not found (earliest possible creation time)
 unsigned int get_creation_time(PyObject* obj) {
-  return 0;
+  if (!level_1_map) {
+    return 0;
+  }
+
+  UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
+  UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
+
+  if (!level_1_map[msb16]) {
+    return 0;
+  }
+  else {
+    return level_1_map[msb16]->contents[lsb16].creation_time;
+  }
 }
 
 #endif
@@ -823,17 +862,30 @@ static void mark_entire_stack_impure(char* why) {
 
 // called at the beginning of execution
 void pg_initialize() {
-  if ((sizeof(UInt32) != 4) ||
-      (sizeof(UInt64) != 8)) {
-    fprintf(stderr, "ERROR: UInt32 and UInt64 types have the wrong sizes.\n");
-    Py_Exit(1);
-  }
-
 #ifdef DISABLE_MEMOIZE
   return;
 #endif
 
   assert(!pg_activated);
+
+
+  if ((sizeof(UInt16) != 2) ||
+      (sizeof(UInt32) != 4) ||
+      (sizeof(UInt64) != 8)) {
+    fprintf(stderr, "ERROR: UInt16, UInt32, UInt64 types have the wrong sizes.\n");
+    Py_Exit(1);
+  }
+
+// initialize zero out maps:
+#ifdef HOST_IS_64BIT
+// 64-bit architecture
+
+#else
+// 32-bit architecture
+  level_1_map = PyMem_New(obj_metadata_map*, METADATA_MAP_SIZE);
+  memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
+  //printf("sizeof(level_1_map): %lu\n", sizeof(*level_1_map) * METADATA_MAP_SIZE);
+#endif
 
 
 #ifdef ENABLE_DEBUG_LOGGING // defined in "memoize_logging.h"
@@ -1295,7 +1347,7 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
                                       PyFrameObject* cur_frame) {
   // this will be used to prevent infinite loops when there are circular
   // dependencies (see IncPy-regression-tests/circular_code_dependency/)
-  my_func_memo_info->last_dep_check_instr_time = num_executed_instrs;
+  my_func_memo_info->last_dep_check_func_call_time = num_executed_func_calls;
 
   Py_ssize_t pos; // must reset on every iterator call, or else does the wrong thing
 
@@ -1512,8 +1564,8 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
 
     // don't recurse on a function that we've already checked, or else
     // you will infinite loop:
-    if (my_func_memo_info->last_dep_check_instr_time == 
-        called_func_memo_info->last_dep_check_instr_time) {
+    if (my_func_memo_info->last_dep_check_func_call_time ==
+        called_func_memo_info->last_dep_check_func_call_time) {
       continue;
     }
 
@@ -1530,6 +1582,9 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
 // returns a PyObject* if we can re-use a memoized result and NULL if we cannot
 PyObject* pg_enter_frame(PyFrameObject* f) {
   MEMOIZE_PUBLIC_START_RETNULL()
+
+  // TODO: is this the right place to put this?
+  num_executed_func_calls++;
 
   // mark entire stack impure when calling Python functions with names
   // matching definitely_impure_funcs
@@ -1551,7 +1606,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   BEGIN_TIMING(f->start_time);
 
-  f->start_instr_time = num_executed_instrs;
+  f->start_func_call_time = num_executed_func_calls;
 
   PyCodeObject* co = f->f_code;
 
@@ -1858,7 +1913,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
 
   if (f->func_memo_info) {
-    assert(f->start_instr_time > 0);
+    assert(f->start_func_call_time > 0);
   }
 
   // we don't need to decref this ...
@@ -2567,9 +2622,6 @@ void pg_about_to_MUTATE_event(PyObject *object) {
     mark_entire_stack_impure("mutate global");
   }
   else {
-    // STINT - I don't yet support Py_CREATION_TIME in this branch ...
-
-    /*
     // then fall back on the more general check, which picks up
     // mutations of function arguments as well:
 
@@ -2578,21 +2630,20 @@ void pg_about_to_MUTATE_event(PyObject *object) {
     PyFrameObject* f = top_frame;
     while (f) {
       if (f->func_memo_info) {
-        if (Py_CREATION_TIME(object) < f->start_instr_time) {
+        if (get_creation_time(object) < f->start_func_call_time) {
           mark_impure(f, "mutate non-local value");
         }
         else {
           // small optimization: since we are going 'backwards' up the
           // stack, the start_instr_time should be strictly decreasing
           // (for all frames with a func_memo_info), so once we get smaller
-          // than Py_CREATION_TIME(object), we can break out of the loop
+          // than get_creation_time(object), we can break out of the loop
           // and not check any more frames
           break;
         }
       }
       f = f->f_back;
     }
-    */
   }
 
 #ifdef ENABLE_COW
