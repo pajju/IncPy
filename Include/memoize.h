@@ -101,11 +101,11 @@ PyObject* pg_create_canonical_code_name(PyCodeObject* co);
 // simple bloom filter, adapted from:
 //   http://en.literateprograms.org/Bloom_filter_%28C%29
 typedef struct {
-  size_t asize;
-  unsigned char *a;
+  unsigned int asize;
+  unsigned char* a;
 } BLOOM;
 
-BLOOM* bloom_create(size_t size);
+BLOOM* bloom_create(unsigned int size);
 void bloom_destroy(BLOOM* bloom);
 void bloom_add(BLOOM* bloom, void* addr);
 int bloom_check(BLOOM* bloom, void* addr);

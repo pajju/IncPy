@@ -287,17 +287,17 @@ static void init_definitely_impure_funcs(void);
 //   http://en.literateprograms.org/Bloom_filter_%28C%29
 
 // a good heuristic is to make 'size' be a prime number
-BLOOM* bloom_create(size_t size) {
+BLOOM* bloom_create(unsigned int size) {
   BLOOM* bloom;
 
   if (!(bloom=PyMem_New(BLOOM, 1))) return NULL;
 
-  if (!(bloom->a=PyMem_New(char, (size+CHAR_BIT-1)/CHAR_BIT))) {
+  if (!(bloom->a=PyMem_New(unsigned char, (size+CHAR_BIT-1)/CHAR_BIT))) {
     PyMem_Del(bloom);
     return NULL;
   }
   else {
-    memset(bloom->a, 0, sizeof(char) * ((size+CHAR_BIT-1)/CHAR_BIT));
+    memset(bloom->a, 0, sizeof(unsigned char) * ((size+CHAR_BIT-1)/CHAR_BIT));
   }
 
   bloom->asize=size;
