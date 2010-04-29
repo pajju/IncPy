@@ -134,6 +134,8 @@ typedef unsigned long long int  UInt64;
 #define METADATA_MAP_MASK (METADATA_MAP_SIZE-1)
 
 // efficient multi-level mapping of PyObject addresses to metadata
+// (inspired by Valgrind Memcheck's multi-level shadow memory
+//  implementation: http://valgrind.org/docs/shadow-memory2007.pdf)
 typedef struct {
   struct {
     unsigned int creation_time; // measured in number of elapsed function calls
