@@ -133,9 +133,17 @@ typedef unsigned long long int  UInt64;
 #define METADATA_MAP_SIZE 65536 // 16 bits
 #define METADATA_MAP_MASK (METADATA_MAP_SIZE-1)
 
-// efficient multi-level mapping of PyObject addresses to metadata
-// (inspired by Valgrind Memcheck's multi-level shadow memory
-//  implementation: http://valgrind.org/docs/shadow-memory2007.pdf)
+/* efficient multi-level mapping of PyObject addresses to metadata
+   (inspired by Valgrind Memcheck's multi-level shadow memory
+    implementation: http://valgrind.org/docs/shadow-memory2007.pdf)
+
+   We do this 'shadowing' rather than directly augmenting the PyObject
+   struct so that we can maintain BINARY COMPATIBILITY with existing
+   libraries containing compiled extension code (e.g., numpy, scipy).
+   Pre-compiled versions of these libraries are hard-coded with the
+   default PyObject struct layout, so if we change PyObject by adding
+   fields to it, then we will need to re-compile those libraries,
+   which is a big pain! */
 typedef struct {
   struct {
     unsigned int creation_time; // measured in number of elapsed function calls
