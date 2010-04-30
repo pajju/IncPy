@@ -114,11 +114,6 @@ typedef struct _frame {
     // (Optimization: remain NULL when empty)
     PyObject* stored_args_lst;
 
-    // set containing the addresses of MUTABLE objects that are reachable
-    // from any argument of the current frame
-    // (Optimization: remain NULL when empty, lazy initialize)
-    PyObject* arg_reachable_set;
-
     /* END   - pgbovine new fields */
 
     PyTryBlock f_blockstack[CO_MAXBLOCKS]; /* for try and loop blocks */
