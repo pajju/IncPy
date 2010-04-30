@@ -43,7 +43,7 @@
 
    This cache is implemented as a DICT where the key and value refer to
    the same object, so we can simply add WEAK references to it in
-   obj_metadata_map.contents[].global_container */
+   obj_metadata_map.contents[].global_container_weakref */
 PyObject* global_containment_intern_cache = NULL;
 
 

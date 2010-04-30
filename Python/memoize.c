@@ -2576,11 +2576,8 @@ void pg_about_to_MUTATE_event(PyObject *object) {
   }
 
 
-  // OPTIMIZATION: simply checking for global reachability is really
+  // OPTIMIZATION: simply checking for global reachability is pretty
   // fast, so do this as the first check (most common case) ...
-  //
-  // TODO: I dunno how fast it is now that we need to do a hashtable
-  // look-up rather than a simple field look-up
   PyObject* global_container = get_global_container(object);
   if (global_container) {
     /* SUPER HACK: ignore mutations to global variables defined in files
