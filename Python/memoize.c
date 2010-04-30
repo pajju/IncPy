@@ -290,6 +290,8 @@ static void init_definitely_impure_funcs(void);
 
 // TODO: implement me!!!
 
+#   error "IncPy compilation error: No support yet for 64-bit architecture"
+
 #else
 // 32-bit architecture
 
@@ -376,59 +378,6 @@ unsigned int get_creation_time(PyObject* obj) {
 }
 
 #endif
-
-
-// simple bloom filter, adapted from:
-//   http://en.literateprograms.org/Bloom_filter_%28C%29
-
-// a good heuristic is to make 'size' be a prime number
-BLOOM* bloom_create(unsigned int size) {
-  BLOOM* bloom;
-
-  if (!(bloom=PyMem_New(BLOOM, 1))) return NULL;
-
-  if (!(bloom->a=PyMem_New(unsigned char, (size+CHAR_BIT-1)/CHAR_BIT))) {
-    PyMem_Del(bloom);
-    return NULL;
-  }
-  else {
-    memset(bloom->a, 0, sizeof(unsigned char) * ((size+CHAR_BIT-1)/CHAR_BIT));
-  }
-
-  bloom->asize=size;
-  return bloom;
-}
-
-void bloom_destroy(BLOOM* bloom) {
-  PyMem_Del(bloom->a);
-  PyMem_Del(bloom);
-}
-
-void bloom_add(BLOOM* bloom, void* addr) {
-  /*
-  printf("bloom_add %u %u %u\n",
-         (unsigned int) addr,
-         HASH1(addr) % bloom->asize,
-         HASH2(addr) % bloom->asize);
-  */
-
-  SETBIT(bloom->a, HASH1(addr) % bloom->asize);
-  SETBIT(bloom->a, HASH2(addr) % bloom->asize);
-}
-
-int bloom_check(BLOOM* bloom, void* addr) {
-  /*
-  printf("bloom_check %u %u %u\n",
-         (unsigned int) addr,
-         HASH1(addr) % bloom->asize,
-         HASH2(addr) % bloom->asize);
-  */
-
-  if(!(GETBIT(bloom->a, HASH1(addr) % bloom->asize))) return 0;
-  if(!(GETBIT(bloom->a, HASH2(addr) % bloom->asize))) return 0;
-  return 1;
-}
-
 
 
 // make a deep copy of obj and return it as a new reference
