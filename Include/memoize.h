@@ -147,8 +147,12 @@ typedef unsigned long long int  UInt64;
 typedef struct {
   struct {
     unsigned int creation_time; // measured in number of elapsed function calls
-    // WEAK REFERENCE - This should only be set for MUTABLE values
-    // (see update_global_container for more details on why)
+    /* WEAK REFERENCE - This should only be set for MUTABLE values
+       (see update_global_container for more details on why)
+
+       since this is a weak reference, make sure that there's at least
+       ONE other reference to this object, so that it doesn't get
+       garbage collected */
     PyObject* global_container_weakref;
   } contents[METADATA_MAP_SIZE];
 } obj_metadata_map;
