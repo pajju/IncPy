@@ -148,7 +148,7 @@ typedef struct {
   struct {
     unsigned int creation_time; // measured in number of elapsed function calls
     /* WEAK REFERENCE - This should only be set for MUTABLE values
-       (see update_global_container for more details on why)
+       (see update_global_container_weakref() for more details on why)
 
        since this is a weak reference, make sure that there's at least
        ONE other reference to this object, so that it doesn't get
