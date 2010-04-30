@@ -42,7 +42,7 @@ PyObject* find_globally_reachable_obj_by_name(PyObject* varname_tuple,
 
 PyObject* create_varname_tuple(PyObject* filename, PyObject* varname);
 PyObject* extend_with_attrname(PyObject* parent, PyObject* attrname);
-void update_global_container(PyObject* obj, PyObject* new_elt);
+void update_global_container_weakref(PyObject* obj, PyObject* new_elt);
 PyObject* get_global_container(PyObject* obj);
 
 int contains_externally_aliased_mutable_obj(PyObject* obj, PyFrameObject* f);

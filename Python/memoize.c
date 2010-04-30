@@ -2435,7 +2435,7 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
   }
   assert(new_varname);
 
-  update_global_container(value, new_varname);
+  update_global_container_weakref(value, new_varname);
 
   MEMOIZE_PUBLIC_END()
 }
@@ -2511,11 +2511,11 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value) {
         add_global_read_to_top_frame(new_varname);
       }
 
-      update_global_container(value, new_varname);
+      update_global_container_weakref(value, new_varname);
     }
     else {
       // extend global reachability to value
-      update_global_container(value, global_container);
+      update_global_container_weakref(value, global_container);
     }
   }
 
@@ -2544,7 +2544,7 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
   // extend global reachability to res
   PyObject* global_container = get_global_container(obj);
   if (global_container) {
-    update_global_container(res, global_container);
+    update_global_container_weakref(res, global_container);
   }
 
   MEMOIZE_PUBLIC_END()

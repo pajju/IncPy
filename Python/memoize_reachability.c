@@ -227,7 +227,7 @@ PyObject* extend_with_attrname(PyObject* parent, PyObject* attrname) {
    the 'Optimization' note at the top of this file for why we do this)
 
    WE ONLY DO THIS FOR MUTABLE OBJECTS! */
-void update_global_container(PyObject* obj, PyObject* new_elt) {
+void update_global_container_weakref(PyObject* obj, PyObject* new_elt) {
   // VERY IMPORTANT but subtle point - immutable values might be
   // interned by the Python interpreter implementation (e.g., small
   // integers are interned), so we don't want to taint them by adding
