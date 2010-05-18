@@ -554,6 +554,19 @@ PyObject* _pysqlite_query_execute(pysqlite_Cursor* self, int multiple, PyObject*
     pysqlite_statement_mark_dirty(self->statement);
 
     statement_type = detect_statement_type(operation_cstr);
+
+    /* pgbovine - add a file read dependency for SELECT (read-only)
+       statements and mark impure for all other statements (since they
+       could possibly mutate the db) */
+    if (statement_type == STATEMENT_SELECT) {
+      if (self->connection->db_file_handle) {
+        pg_FILE_READ_event(self->connection->db_file_handle);
+      }
+    }
+    else {
+      pg_MARK_IMPURE_event("possible modification to sqlite3 database");
+    }
+
     if (self->connection->begin_statement) {
         switch (statement_type) {
             case STATEMENT_UPDATE:

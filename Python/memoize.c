@@ -406,10 +406,9 @@ static PyObject* create_proxy_object(PyObject* obj) {
       pysqlite_Cursor* cur = (pysqlite_Cursor*)obj;
       pysqlite_Connection* conn = cur->connection;
 
-      // only create a proxy if the db_filename is non-null
-      if (conn->db_filename) {
+      if (conn->db_file_handle->f_name) {
         PyObject* proxy_tag = PyString_FromString("Sqlite3CursorProxy");
-        PyObject* ret = PyTuple_Pack(2, proxy_tag, conn->db_filename);
+        PyObject* ret = PyTuple_Pack(2, proxy_tag, conn->db_file_handle->f_name);
         Py_DECREF(proxy_tag);
         return ret;
       }
@@ -874,6 +873,12 @@ static void mark_entire_stack_impure(char* why) {
     mark_impure(f, why);
     f = f->f_back;
   }
+}
+
+void pg_MARK_IMPURE_event(char* why) {
+  MEMOIZE_PUBLIC_START()
+  mark_entire_stack_impure(why);
+  MEMOIZE_PUBLIC_END()
 }
 
 
@@ -2897,6 +2902,8 @@ void pg_FILE_CLOSE_event(PyFileObject* fobj) {
      file.readlines()
      file.xreadlines()
      file_iternext() --- for doing "for x in file: ..."
+
+     execution of an sqlite SELECT statement
 
 TODO: how many more are there?  what about native C calls that bypass
 Python File objects altogether?
