@@ -379,6 +379,25 @@ unsigned int get_creation_time(PyObject* obj) {
 
 #endif
 
+/* proxy objects - for objects that can't be pickled, we can instead
+   create picklable proxies in their place */
+
+
+// returns NULL if we don't need to create a proxy for the object
+static PyObject* create_proxy_object(PyObject* obj) {
+  if (PyFile_Check(obj)) {
+    PyFileObject* f = (PyFileObject*)obj;
+    PyObject* proxy_tag = PyString_FromString("FileProxy");
+    PyObject* ret = PyTuple_Pack(2, proxy_tag, f->f_name);
+    Py_DECREF(proxy_tag);
+    return ret;
+  }
+  else {
+    return NULL;
+  }
+}
+
+
 
 // make a deep copy of obj and return it as a new reference
 // (returns NULL on error)
@@ -971,8 +990,10 @@ void pg_initialize() {
 
   PyObject* config_file = PyFile_FromString(PyString_AsString(incpy_config_path), "r");
   if (!config_file) {
-    fprintf(stderr, "ERROR: IncPy config file not found.\n       Please create a proper config file here: %s\n",
+    fprintf(stderr, "ERROR: IncPy config file not found.  Create an empty file with this command:\n\ntouch %s\n\nFor better performance, ignore all standard library code by\nadding this line to your incpy.config file:\n\nignore = <absolute path to IncPy installation directory>\n",
             PyString_AsString(incpy_config_path));
+    assert(PyErr_Occurred());
+    PyErr_Clear();
     Py_Exit(1);
   }
 
@@ -1676,6 +1697,13 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         PyObject* memoized_elt = PyList_GET_ITEM(memoized_arg_lst, j);
         PyObject* actual_elt   = f->f_localsplus[j];
 
+        // compare proxy objects rather than real objects if necessary,
+        // since memoized_elt might be a proxy object
+        PyObject* proxy_elt = create_proxy_object(actual_elt);
+        if (proxy_elt) {
+          actual_elt = proxy_elt;
+        }
+
         // obj_equals is potentially expensive to compute ...
         if (!obj_equals(memoized_elt, actual_elt)) {
           all_args_equal = 0;
@@ -2031,43 +2059,47 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     PyObject* elt = PyList_GET_ITEM(f->stored_args_lst, i);
     PyObject* copy = NULL;
 
+    // first try to see if we can create a proxy object:
+    copy = create_proxy_object(elt);
 
-    /* don't memoize functions whose arguments don't implement any form
-       of non-identity-based comparison (e.g., using __eq__ or __cmp__
-       methods), since in those cases, there is no way that we can
-       possibly MATCH THEM UP with their original incarnations once we
-       load the memoized values from disk (the version loaded from disk
-       will be a different object than the one in memory, so '==' will
-       ALWAYS FAIL if a comparison method isn't implemented)
+    // if we don't have a proxy object ...
+    if (copy == NULL) {
+      /* don't memoize functions whose arguments don't implement any form
+         of non-identity-based comparison (e.g., using __eq__ or __cmp__
+         methods), since in those cases, there is no way that we can
+         possibly MATCH THEM UP with their original incarnations once we
+         load the memoized values from disk (the version loaded from disk
+         will be a different object than the one in memory, so '==' will
+         ALWAYS FAIL if a comparison method isn't implemented)
 
-       for speed purposes, do this BEFORE checking for is_picklable()
-       since has_comparison_method() is much faster! */
-    if (!has_comparison_method(elt)) {
-      PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Arg %u of %s has no comparison method', type='%s')\n",
-                    (unsigned)i,
-                    PyString_AsString(canonical_name),
-                    Py_TYPE(elt)->tp_name);
-      USER_LOG_PRINTF("CANNOT_MEMOIZE %s | arg %u of type '%s' has no comparison method | runtime %ld ms\n",
-                      PyString_AsString(canonical_name), (unsigned)i, Py_TYPE(elt)->tp_name, runtime_ms);
-      goto pg_exit_frame_done;
-    }
-
-
-    if (is_picklable(elt)) {
-#ifdef ENABLE_COW
-      // defer the deepcopy until elt has been mutated
-      copy = elt;
-      Py_INCREF(copy); // always incref to match what happens in deepcopy_func
-      cow_containment_dict_ADD(elt);
-#else
-      // eagerly make the deepcopy NOW!
-      copy = deepcopy(elt);
-
-      if (!copy) {
-        assert(PyErr_Occurred());
-        PyErr_Clear();
+         for speed purposes, do this BEFORE checking for is_picklable()
+         since has_comparison_method() is much faster! */
+      if (!has_comparison_method(elt)) {
+        PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Arg %u of %s has no comparison method', type='%s')\n",
+                      (unsigned)i,
+                      PyString_AsString(canonical_name),
+                      Py_TYPE(elt)->tp_name);
+        USER_LOG_PRINTF("CANNOT_MEMOIZE %s | arg %u of type '%s' has no comparison method | runtime %ld ms\n",
+                        PyString_AsString(canonical_name), (unsigned)i, Py_TYPE(elt)->tp_name, runtime_ms);
+        goto pg_exit_frame_done;
       }
+
+      if (is_picklable(elt)) {
+#ifdef ENABLE_COW
+        // defer the deepcopy until elt has been mutated
+        copy = elt;
+        Py_INCREF(copy); // always incref to match what happens in deepcopy_func
+        cow_containment_dict_ADD(elt);
+#else
+        // eagerly make the deepcopy NOW!
+        copy = deepcopy(elt);
+
+        if (!copy) {
+          assert(PyErr_Occurred());
+          PyErr_Clear();
+        }
 #endif // ENABLE_COW
+      }
     }
 
     // If ANY argument is unpicklable, then we must be conservative and
