@@ -382,19 +382,41 @@ unsigned int get_creation_time(PyObject* obj) {
 /* proxy objects - for objects that can't be pickled, we can instead
    create picklable proxies in their place */
 
+// ugh, ugly #include dependency, but I don't see any way of avoiding it :(
+#include "Modules/_sqlite/cursor.h"
+#include "Modules/_sqlite/connection.h"
 
 // returns NULL if we don't need to create a proxy for the object
 static PyObject* create_proxy_object(PyObject* obj) {
+  // for files, create a tuple: ('FileProxy', <filename>)
   if (PyFile_Check(obj)) {
     PyFileObject* f = (PyFileObject*)obj;
+
     PyObject* proxy_tag = PyString_FromString("FileProxy");
     PyObject* ret = PyTuple_Pack(2, proxy_tag, f->f_name);
     Py_DECREF(proxy_tag);
+
     return ret;
   }
   else {
-    return NULL;
+    const char* obj_typename = Py_TYPE(obj)->tp_name;
+
+    // for sqlite3 cursor, create a tuple: ('Sqlite3CursorProxy', <db filename>)
+    if (strcmp(obj_typename, "sqlite3.Cursor") == 0) {
+      pysqlite_Cursor* cur = (pysqlite_Cursor*)obj;
+      pysqlite_Connection* conn = cur->connection;
+
+      // only create a proxy if the db_filename is non-null
+      if (conn->db_filename) {
+        PyObject* proxy_tag = PyString_FromString("Sqlite3CursorProxy");
+        PyObject* ret = PyTuple_Pack(2, proxy_tag, conn->db_filename);
+        Py_DECREF(proxy_tag);
+        return ret;
+      }
+    }
   }
+
+  return NULL;
 }
 
 
@@ -1701,12 +1723,16 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         // since memoized_elt might be a proxy object
         PyObject* proxy_elt = create_proxy_object(actual_elt);
         if (proxy_elt) {
-          actual_elt = proxy_elt;
+          actual_elt = proxy_elt; // allocs a new object if non-null
+        }
+        else {
+          Py_INCREF(actual_elt); // to match what happens in the other branch
         }
 
         // obj_equals is potentially expensive to compute ...
         if (!obj_equals(memoized_elt, actual_elt)) {
           all_args_equal = 0;
+          Py_DECREF(actual_elt); // tricky tricky!
           break;
         }
         else {
@@ -1734,6 +1760,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
           }
 #endif // ENABLE_COW
         }
+
+        Py_DECREF(actual_elt); // tricky tricky!
       }
 
 
@@ -2060,7 +2088,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     PyObject* copy = NULL;
 
     // first try to see if we can create a proxy object:
-    copy = create_proxy_object(elt);
+    copy = create_proxy_object(elt); // allocs a new object if non-null
 
     // if we don't have a proxy object ...
     if (copy == NULL) {

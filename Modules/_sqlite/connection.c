@@ -84,6 +84,8 @@ int pysqlite_connection_init(pysqlite_Connection* self, PyObject* args, PyObject
     Py_INCREF(&PyUnicode_Type);
     self->text_factory = (PyObject*)&PyUnicode_Type;
 
+    self->db_filename = NULL; // pgbovine
+
     if (PyString_Check(database) || PyUnicode_Check(database)) {
         if (PyString_Check(database)) {
             database_utf8 = database;
@@ -98,6 +100,9 @@ int pysqlite_connection_init(pysqlite_Connection* self, PyObject* args, PyObject
         Py_BEGIN_ALLOW_THREADS
         rc = sqlite3_open(PyString_AsString(database_utf8), &self->db);
         Py_END_ALLOW_THREADS
+
+        self->db_filename = database_utf8; // pgbovine
+        Py_INCREF(self->db_filename);      // pgbovine
 
         Py_DECREF(database_utf8);
 
@@ -263,6 +268,8 @@ void pysqlite_connection_dealloc(pysqlite_Connection* self)
     Py_XDECREF(self->text_factory);
     Py_XDECREF(self->collations);
     Py_XDECREF(self->statements);
+
+    Py_XDECREF(self->db_filename); // pgbovine
 
     self->ob_type->tp_free((PyObject*)self);
 }

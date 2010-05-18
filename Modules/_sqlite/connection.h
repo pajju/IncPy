@@ -111,6 +111,8 @@ typedef struct
     PyObject* InternalError;
     PyObject* ProgrammingError;
     PyObject* NotSupportedError;
+
+    PyObject* db_filename; /* pgbovine - to help with creating a proxy object */
 } pysqlite_Connection;
 
 extern PyTypeObject pysqlite_ConnectionType;
