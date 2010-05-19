@@ -434,9 +434,7 @@ static PyObject* create_proxy_object(PyObject* obj) {
 // (returns NULL on error)
 PyObject* deepcopy(PyObject* obj) {
   assert(deepcopy_func);
-  PyObject* tup = PyTuple_Pack(1, obj);
-  PyObject* ret = PyObject_Call(deepcopy_func, tup, NULL);
-  Py_DECREF(tup);
+  PyObject* ret = PyObject_CallFunctionObjArgs(deepcopy_func, obj, NULL);
 
   // if we failed, then try to see if we can find a copy() method,
   // and if so, try to use that instead.  (e.g., NumPy arrays and
@@ -524,9 +522,7 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
       PyObject* allclose_func = PyObject_GetAttrString(numpy_module, "allclose");
       assert(allclose_func);
 
-      PyObject* args_tup = PyTuple_Pack(2, obj1, obj2);
-      PyObject* res_bool = PyObject_Call(allclose_func, args_tup, NULL);
-      Py_DECREF(args_tup);
+      PyObject* res_bool = PyObject_CallFunctionObjArgs(allclose_func, obj1, obj2, NULL);
       Py_DECREF(allclose_func);
 
       if (res_bool) {
@@ -600,9 +596,7 @@ static int prefix_in_ignore_paths_lst(PyObject* s) {
   // convert s to an ABSOLUTE PATH if possible
   // (otherwise, just use s as-is)
   if (abspath_func) {
-    PyObject* tmp_tup = PyTuple_Pack(1, s);
-    path = PyObject_Call(abspath_func, tmp_tup, NULL);
-    Py_DECREF(tmp_tup);
+    path = PyObject_CallFunctionObjArgs(abspath_func, s, NULL);
   }
   else {
     path = s;
@@ -648,9 +642,7 @@ static PyObject* create_canonical_code_name(PyCodeObject* this_code) {
   assert(PyString_CheckExact(name));
   assert(PyString_CheckExact(filename));
 
-  PyObject* tup = PyTuple_Pack(1, filename);
-  PyObject* filename_abspath = PyObject_Call(abspath_func, tup, NULL);
-  Py_DECREF(tup);
+  PyObject* filename_abspath = PyObject_CallFunctionObjArgs(abspath_func, filename, NULL);
 
   // this fails *mysteriously* in numpy when doing:
   //
@@ -985,23 +977,17 @@ void pg_initialize() {
   PyObject* join_func = PyObject_GetAttrString(path_module, "join");
 
   PyObject* tmp_str = PyString_FromString("HOME");
-  PyObject* tmp_tup = PyTuple_Pack(1, tmp_str);
-  PyObject* homedir = PyObject_Call(getenv_func, tmp_tup, NULL);
+  PyObject* homedir = PyObject_CallFunctionObjArgs(getenv_func, tmp_str, NULL);
   assert(homedir);
-  Py_DECREF(tmp_tup);
   Py_DECREF(tmp_str);
 
   tmp_str = PyString_FromString("incpy.config");
-  tmp_tup = PyTuple_Pack(2, homedir, tmp_str);
-  PyObject* incpy_config_path = PyObject_Call(join_func, tmp_tup, NULL);
+  PyObject* incpy_config_path = PyObject_CallFunctionObjArgs(join_func, homedir, tmp_str, NULL);
   assert(incpy_config_path);
-
-  Py_DECREF(tmp_tup);
   Py_DECREF(tmp_str);
 
   tmp_str = PyString_FromString("incpy.aggregate.log");
-  tmp_tup = PyTuple_Pack(2, homedir, tmp_str);
-  PyObject* incpy_log_path = PyObject_Call(join_func, tmp_tup, NULL);
+  PyObject* incpy_log_path = PyObject_CallFunctionObjArgs(join_func, homedir, tmp_str, NULL);
   assert(incpy_log_path);
 
   // Also open $HOME/incpy.aggregate.log (in append mode) while you're at it:
@@ -1010,7 +996,6 @@ void pg_initialize() {
   user_log_file = fopen("incpy.log", "w");
 
   Py_DECREF(incpy_log_path);
-  Py_DECREF(tmp_tup);
   Py_DECREF(tmp_str);
   Py_DECREF(homedir);
 
@@ -1050,15 +1035,11 @@ void pg_initialize() {
       // 'ignore = <path prefix>'
       if (strcmp(PyString_AsString(lhs_stripped), "ignore") == 0) {
         // first grab the absolute path:
-        tmp_tup = PyTuple_Pack(1, rhs_stripped);
-        PyObject* ignore_abspath = PyObject_Call(abspath_func, tmp_tup, NULL);
-        Py_DECREF(tmp_tup);
+        PyObject* ignore_abspath = PyObject_CallFunctionObjArgs(abspath_func, rhs_stripped, NULL);
 
         // then check to see whether it's an existent file or directory
-        tmp_tup = PyTuple_Pack(1, ignore_abspath);
         PyObject* exists_func = PyObject_GetAttrString(path_module, "exists");
-        PyObject* path_exists_bool = PyObject_Call(exists_func, tmp_tup, NULL);
-        Py_DECREF(tmp_tup);
+        PyObject* path_exists_bool = PyObject_CallFunctionObjArgs(exists_func, ignore_abspath, NULL);
         Py_DECREF(exists_func);
 
         if (!PyObject_IsTrue(path_exists_bool)) {
@@ -1072,9 +1053,7 @@ void pg_initialize() {
         // spurious matches with directory names that have this
         // directory as a prefix
         PyObject* isdir_func = PyObject_GetAttrString(path_module, "isdir");
-        tmp_tup = PyTuple_Pack(1, ignore_abspath);
-        PyObject* path_isdir_bool = PyObject_Call(isdir_func, tmp_tup, NULL);
-        Py_DECREF(tmp_tup);
+        PyObject* path_isdir_bool = PyObject_CallFunctionObjArgs(isdir_func, ignore_abspath, NULL);
         Py_DECREF(isdir_func);
 
         if (PyObject_IsTrue(path_isdir_bool)) {
@@ -1149,9 +1128,7 @@ void pg_initialize() {
   // this file should be small, so start-up time should be fast!
   PyObject* pf = PyFile_FromString("incpy-cache/filenames.pickle", "r");
   if (pf) {
-    PyObject* tup = PyTuple_Pack(1, pf);
-    pickle_filenames = PyObject_Call(cPickle_load_func, tup, NULL);
-    Py_DECREF(tup);
+    pickle_filenames = PyObject_CallFunctionObjArgs(cPickle_load_func, pf, NULL);
     Py_DECREF(pf);
   }
   else {
@@ -1208,8 +1185,6 @@ void pg_finalize() {
   TrieFree(self_mutator_c_methods);
   TrieFree(definitely_impure_funcs);
 
-  PyObject* tup;
-
   struct stat st;
   // create incpy-cache/ sub-directory if it doesn't already exist
   if (stat("incpy-cache", &st) != 0) {
@@ -1228,9 +1203,7 @@ void pg_finalize() {
     // Optimization: only store to disk entries with do_writeback enabled
     if (func_memo_info->do_writeback) {
       PyObject* func_name = GET_CANONICAL_NAME(func_memo_info);
-      tup = PyTuple_Pack(1, func_name);
-      PyObject* md5_func = PyObject_Call(hashlib_md5_func, tup, NULL);
-      Py_DECREF(tup);
+      PyObject* md5_func = PyObject_CallFunctionObjArgs(hashlib_md5_func, func_name, NULL);
 
       PyObject* tmp_str = PyString_FromString("hexdigest");
 
@@ -1254,8 +1227,8 @@ void pg_finalize() {
       PyObject* outf = PyFile_FromString(PyString_AsString(out_fn), "wb");
       assert(outf);
       // pass in -1 to force cPickle to use a binary protocol
-      tup = PyTuple_Pack(3, serialized_func_memo_info, outf, negative_one);
-      PyObject* cPickle_dump_res = PyObject_Call(cPickle_dump_func, tup, NULL);
+      PyObject* cPickle_dump_res =
+        PyObject_CallFunctionObjArgs(cPickle_dump_func, serialized_func_memo_info, outf, negative_one, NULL);
 
       // note that pickling might still fail if there's something inside
       // of serialized_func_memo_info that's not picklable (sadly, our
@@ -1275,7 +1248,6 @@ void pg_finalize() {
                       PyString_AsString(func_name));
       }
 
-      Py_DECREF(tup);
       Py_DECREF(outf);
       Py_DECREF(out_fn);
       Py_DECREF(serialized_func_memo_info);
@@ -1290,9 +1262,8 @@ void pg_finalize() {
   PyObject* pf = PyFile_FromString("incpy-cache/filenames.pickle", "wb");
   assert(pf);
   // pass in -1 to force cPickle to use a binary protocol
-  tup = PyTuple_Pack(3, pickle_filenames, pf, negative_one);
-  PyObject* filenames_dump_res = PyObject_Call(cPickle_dump_func, tup, NULL);
-  Py_DECREF(tup);
+  PyObject* filenames_dump_res =
+    PyObject_CallFunctionObjArgs(cPickle_dump_func, pickle_filenames, pf, negative_one, NULL);
   Py_DECREF(pf);
   Py_DECREF(filenames_dump_res);
 

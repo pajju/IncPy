@@ -137,8 +137,7 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
       // modules to be imported, since the pickle module loads
       // modules as-needed depending on the types of the objects
       // currently being unpickled
-      PyObject* tup = PyTuple_Pack(1, pf);
-      PyObject* serialized_func_memo_info = PyObject_Call(cPickle_load_func, tup, NULL);
+      PyObject* serialized_func_memo_info = PyObject_CallFunctionObjArgs(cPickle_load_func, pf, NULL);
 
       // only initialize my_func_memo_info if serialized_func_memo_info
       // can be properly unpickled
@@ -151,7 +150,6 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
         Py_DECREF(serialized_func_memo_info);
       }
 
-      Py_DECREF(tup);
       Py_DECREF(pf);
     }
     else {

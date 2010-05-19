@@ -19,9 +19,7 @@
 static int _is_picklable_SLOW_BUT_SOUND(PyObject* obj) {
   // just try to pickle it to a string (we'll just throw away the
   // result), and if there's an error, then it's unpicklable
-  PyObject* tup = PyTuple_Pack(1, obj);
-  PyObject* ret = PyObject_Call(cPickle_dumpstr_func, tup, NULL);
-  Py_DECREF(tup);
+  PyObject* ret = PyObject_CallFunctionObjArgs(cPickle_dumpstr_func, obj, NULL);
   if (!ret) {
     assert(PyErr_Occurred());
     PyErr_Clear();
