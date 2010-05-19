@@ -222,9 +222,8 @@ PyObject* extend_with_attrname(PyObject* parent, PyObject* attrname) {
 }
 
 
-/* if obj does not already have a global_container_weakref, then
-   point it to new_elt.  if it already has one, then DO NOTHING!  (see
-   the 'Optimization' note at the top of this file for why we do this)
+/* set global container of obj to new_elt (note that this will always
+   clobber the previous global container of obj, if one already exists)
 
    WE ONLY DO THIS FOR MUTABLE OBJECTS! */
 void update_global_container_weakref(PyObject* obj, PyObject* new_elt) {
@@ -238,7 +237,8 @@ void update_global_container_weakref(PyObject* obj, PyObject* new_elt) {
 
   PyObject* cur_container = get_global_container(obj);
 
-  if (!cur_container) {
+  // don't do a redundant double-set ...
+  if (cur_container != new_elt) {
     set_global_container(obj, new_elt);
   }
 }
