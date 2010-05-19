@@ -28,19 +28,6 @@ typedef struct {
     int b_level;		/* value stack level to pop to */
 } PyTryBlock;
 
-
-// pgbovine - lazily initialize a field like stdout_cStringIO and stderr_cStringIO
-#define LAZY_INIT_STRINGIO_FIELD(x) \
-  do { \
-    if (!x) { \
-      PyObject* new_stringIO = PyObject_CallFunction(stringIO_constructor, NULL); \
-      assert(new_stringIO); \
-      (x) = new_stringIO; \
-    } \
-  } while (0)
-
-
-
 typedef struct _frame {
     PyObject_VAR_HEAD
     struct _frame *f_back;	/* previous frame, or NULL */

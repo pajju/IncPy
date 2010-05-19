@@ -21,6 +21,8 @@
 #include "dictobject.h"
 #include "import.h"
 
+#include "cStringIO.h"
+
 #include <time.h>
 #include <sys/stat.h>
 #include <string.h>
@@ -127,6 +129,16 @@ static FILE* user_log_file = NULL;
 } while(0)
 
 
+// lazily initialize a field like stdout_cStringIO and stderr_cStringIO
+#define LAZY_INIT_STRINGIO_FIELD(x) \
+  do { \
+    if (!x) { \
+      (x) = PycStringIO->NewOutput(128); \
+      assert(x); \
+    } \
+  } while (0)
+
+
 // References to Python standard library functions:
 
 static PyObject* deepcopy_func = NULL;        // copy.deepcopy
@@ -135,8 +147,6 @@ PyObject* cPickle_dumpstr_func = NULL;        // cPickle.dumps
 
 static PyObject* cPickle_dump_func = NULL;    // cPickle.dump
 static PyObject* hashlib_md5_func = NULL;     // hashlib.md5
-
-static PyObject* stringIO_constructor = NULL; // cStringIO.StringIO
 
 static PyObject* abspath_func = NULL; // os.path.abspath
 
@@ -961,11 +971,6 @@ void pg_initialize() {
   Py_DECREF(hashlib_module);
   assert(hashlib_md5_func);
 
-  PyObject* cStringIO_module = PyImport_ImportModule("cStringIO"); // increments refcount
-  stringIO_constructor = PyObject_GetAttrString(cStringIO_module, "StringIO");
-  Py_DECREF(cStringIO_module);
-  assert(stringIO_constructor);
-
   PyObject* os_module = PyImport_ImportModule("os"); // increments refcount
   PyObject* path_module = PyObject_GetAttrString(os_module, "path");
   abspath_func = PyObject_GetAttrString(path_module, "abspath");
@@ -1181,6 +1186,8 @@ void pg_initialize() {
   init_self_mutator_c_methods();
   init_definitely_impure_funcs();
 
+  PycString_IMPORT;
+
   pg_activated = 1;
 }
 
@@ -1322,7 +1329,6 @@ void pg_finalize() {
   Py_CLEAR(cPickle_dump_func);
   Py_CLEAR(cPickle_load_func);
   Py_CLEAR(hashlib_md5_func);
-  Py_CLEAR(stringIO_constructor);
   Py_CLEAR(abspath_func);
   Py_CLEAR(numpy_module);
 
@@ -1837,7 +1843,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
       while (cur_frame) {
         if (cur_frame->func_memo_info) {
           LAZY_INIT_STRINGIO_FIELD(cur_frame->stdout_cStringIO);
-          PyFile_WriteString(PyString_AsString(memoized_stdout_buf), 
+          PyFile_WriteString(PyString_AsString(memoized_stdout_buf),
                              cur_frame->stdout_cStringIO);
         }
         cur_frame = cur_frame->f_back;
@@ -2270,25 +2276,17 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
     // add OPTIONAL fields of memo_table_entry ...
     if (f->stdout_cStringIO) {
-      PyObject* stdout_val = PyObject_CallMethod(f->stdout_cStringIO, "getvalue", NULL);
+      PyObject* stdout_val = PycStringIO->cgetvalue(f->stdout_cStringIO);
       assert(stdout_val);
       PyDict_SetItemString(memo_table_entry, "stdout_buf", stdout_val);
       Py_DECREF(stdout_val);
-
-      PyObject* tmp = PyObject_CallMethod(f->stdout_cStringIO, "close", NULL);
-      assert(tmp);
-      Py_DECREF(tmp);
     }
 
     if (f->stderr_cStringIO) {
-      PyObject* stderr_val = PyObject_CallMethod(f->stderr_cStringIO, "getvalue", NULL);
+      PyObject* stderr_val = PycStringIO->cgetvalue(f->stderr_cStringIO);
       assert(stderr_val);
       PyDict_SetItemString(memo_table_entry, "stderr_buf", stderr_val);
       Py_DECREF(stderr_val);
-
-      PyObject* tmp = PyObject_CallMethod(f->stderr_cStringIO, "close", NULL);
-      assert(tmp);
-      Py_DECREF(tmp);
     }
 
     // lazy initialize
@@ -3123,8 +3121,9 @@ void pg_intercept_file_write(PyFileObject *f, PyObject *args) {
         assert(PyTuple_Size(args) == 1);
         PyObject* out_string = PyTuple_GetItem(args, 0);
         assert(PyString_CheckExact(out_string));
-        PyObject_CallMethod(f->stdout_cStringIO, "write", 
-                            "s", PyString_AsString(out_string));
+
+        char* out_cstr = PyString_AsString(out_string);
+        PycStringIO->cwrite(f->stdout_cStringIO, out_cstr, strlen(out_cstr));
       }
       f = f->f_back;
     }
@@ -3138,8 +3137,9 @@ void pg_intercept_file_write(PyFileObject *f, PyObject *args) {
         assert(PyTuple_Size(args) == 1);
         PyObject* out_string = PyTuple_GetItem(args, 0);
         assert(PyString_CheckExact(out_string));
-        PyObject_CallMethod(f->stderr_cStringIO, "write", 
-                            "s", PyString_AsString(out_string));
+
+        char* out_cstr = PyString_AsString(out_string);
+        PycStringIO->cwrite(f->stderr_cStringIO, out_cstr, strlen(out_cstr));
       }
       f = f->f_back;
     }
