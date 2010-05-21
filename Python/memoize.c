@@ -1718,7 +1718,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
           break;
         }
         else {
-#ifdef ENABLE_COW
           /* Optimization: If memoized_elt and actual_elt point to different
              objects whose values are EQUAL, then simply replace
              &memoized_elt (the appropriate element within memoized_arg_lst)
@@ -1730,8 +1729,15 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
              possible for someone to mutate actual_elt and have its value
              actually NOT be equal to memoized_elt any longer.  In that
              case, we should set &memoized_elt (the appropriate element
-             within memoized_arg_lst) back to its original value. */
+             within memoized_arg_lst) back to its original value.
 
+             UPDATE: Let's disable the hash consing optimization for
+             now, since the call to cow_containment_dict_ADD REALLY
+             slows things down in some benchmarks by shooting the memory
+             usage THROUGH THE ROOF! */
+#ifdef USE_HASH_CONSING_OPT
+
+#ifdef ENABLE_COW
           // Remember, do this only their values are equal but their
           // addresses are NOT EQUAL ...
           if (memoized_elt != actual_elt) {
@@ -1741,6 +1747,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
             cow_containment_dict_ADD(actual_elt);
           }
 #endif // ENABLE_COW
+
+#endif // USE_HASH_CONSING_OPT
         }
 
         Py_DECREF(actual_elt); // tricky tricky!
