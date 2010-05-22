@@ -31,7 +31,6 @@ PyObject* func_name_to_code_dependency;
 
 PyObject* cPickle_dumpstr_func;
 PyObject* cPickle_load_func;
-PyObject* pickle_filenames;
 
 PyObject* deepcopy(PyObject* obj);
 
@@ -97,6 +96,7 @@ void pg_intercept_file_truncate(PyFileObject *f, PyObject *args);
 int pg_ignore_code(PyCodeObject* co);
 PyObject* pg_create_canonical_code_name(PyCodeObject* co);
 
+PyObject* canonical_name_to_filename(PyObject* func_name);
 
 /* check for word size
 

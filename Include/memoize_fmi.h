@@ -32,8 +32,16 @@ typedef struct {
   //   "runtime_ms" --> how many milliseconds it took to run
   //   "stdout_buf" --> buffered stdout string (OPTIONAL!)
   //   "stderr_buf" --> buffered stderr string (OPTIONAL!)
+  //
+  // to support lazy-loading, this field is serialized to disk as:
+  //   incpy-cache/XXX.memoized_vals.pickle
+  //
+  // don't access this field directly ...
+  //   instead use get_memoized_vals_lst()
   PyObject* memoized_vals;            // List
 
+  // all of these fields are serialized to disk as:
+  //   incpy-cache/XXX.dependencies.pickle
   PyObject* code_dependencies;        // Dict
   PyObject* global_var_dependencies;  // Dict
   PyObject* file_read_dependencies;   // Dict
@@ -57,6 +65,7 @@ typedef struct {
   char do_writeback; // Optimization: should we write back this entry to disk?
   char is_impure;    // is this function impure during THIS execution?
   char all_code_deps_SAT; // are all code dependencies satisfied during THIS execution?
+  char memoized_vals_loaded; // have we attempted to load memoized_vals from disk yet?
 
 } FuncMemoInfo;
 

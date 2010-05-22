@@ -175,7 +175,8 @@ extern FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod);
 extern void DELETE_func_memo_info(FuncMemoInfo* fmi);
 extern void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info);
 extern FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod);
-extern PyObject* serialize_func_memo_info(FuncMemoInfo* func_memo_info);
+extern PyObject* serialize_func_memo_info_dependencies(FuncMemoInfo* func_memo_info);
+extern PyObject* get_memoized_vals_lst(FuncMemoInfo* fmi);
 
 
 // set time limit to something smaller for debug mode, so that my
@@ -185,15 +186,6 @@ unsigned int memoize_time_limit_ms = 100;
 #else
 unsigned int memoize_time_limit_ms = 1000;
 #endif // Py_DEBUG
-
-// A dict (which will be pickled into filenames.pickle) that contains
-// the mangled filenames of .pickle files holding each func_memo_info
-// object.  This will be saved to disk.
-//
-// Key:   canonical name of function
-// Value: filename of the .pickle file that holds the func_memo_info
-//        for that function (md5 of canonical name + '.pickle')
-PyObject* pickle_filenames = NULL;
 
 
 /* Dict where each key is a canonical name and each value is a PyLong
@@ -884,6 +876,21 @@ void pg_MARK_IMPURE_event(char* why) {
 }
 
 
+// translates the canonical name func_name into a newly-allocated string
+// that can be used as part of a filename that uniquely identifies it:
+PyObject* canonical_name_to_filename(PyObject* func_name) {
+  PyObject* md5_func = PyObject_CallFunctionObjArgs(hashlib_md5_func, func_name, NULL);
+  PyObject* tmp_str = PyString_FromString("hexdigest");
+
+  // Perform: hashlib.md5(func_name).hexdigest()
+  PyObject* hexdigest = PyObject_CallMethodObjArgs(md5_func, tmp_str, NULL);
+  Py_DECREF(md5_func);
+  Py_DECREF(tmp_str);
+
+  return hexdigest;
+}
+
+
 // called at the beginning of execution
 void pg_initialize() {
 #ifdef DISABLE_MEMOIZE
@@ -1125,22 +1132,6 @@ void pg_initialize() {
   cow_traced_addresses_set = PySet_New(NULL);
 
 
-  // this file should be small, so start-up time should be fast!
-  PyObject* pf = PyFile_FromString("incpy-cache/filenames.pickle", "r");
-  if (pf) {
-    pickle_filenames = PyObject_CallFunctionObjArgs(cPickle_load_func, pf, NULL);
-    Py_DECREF(pf);
-  }
-  else {
-    // silently clear error ...
-    if (PyErr_Occurred()) {
-      PyErr_Clear();
-    }
-    pickle_filenames = PyDict_New();
-  }
-
-  assert(pickle_filenames);
-
   char time_buf[100];
   time_t t = time(NULL);
   struct tm* tmp_tm = localtime(&t);
@@ -1203,78 +1194,86 @@ void pg_finalize() {
     // Optimization: only store to disk entries with do_writeback enabled
     if (func_memo_info->do_writeback) {
       PyObject* func_name = GET_CANONICAL_NAME(func_memo_info);
-      PyObject* md5_func = PyObject_CallFunctionObjArgs(hashlib_md5_func, func_name, NULL);
 
-      PyObject* tmp_str = PyString_FromString("hexdigest");
+      PyObject* basename = canonical_name_to_filename(func_name);
 
-      // Perform: hashlib.md5(func_name).hexdigest()
-      PyObject* hexdigest = PyObject_CallMethodObjArgs(md5_func, tmp_str, NULL);
-      Py_DECREF(md5_func);
-      Py_DECREF(tmp_str);
+      PyObject* deps_fn =
+        PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
+                            PyString_AsString(basename));
 
-      // append '.pickle' to get the output filename for this func_memo_info
-      char* hexdigest_str = PyString_AsString(hexdigest);
-      PyObject* out_fn = PyString_FromFormat("incpy-cache/%s.pickle",
-                                             hexdigest_str);
-      Py_DECREF(hexdigest);
+      // pickle dependencies to disk:
+      PyObject* serialized_deps =
+        serialize_func_memo_info_dependencies(func_memo_info);
 
-      // Create a serialized form of func_memo_info and pickle
-      // it to disk to a file named out_fn
-      PyObject* serialized_func_memo_info = serialize_func_memo_info(func_memo_info);
-
-      // open file in binary mode, since we're going to use a binary
-      // pickle protocol for efficiency
-      PyObject* outf = PyFile_FromString(PyString_AsString(out_fn), "wb");
-      assert(outf);
+      PyObject* deps_outfile = PyFile_FromString(PyString_AsString(deps_fn), "wb");
+      assert(deps_outfile);
       // pass in -1 to force cPickle to use a binary protocol
       PyObject* cPickle_dump_res =
-        PyObject_CallFunctionObjArgs(cPickle_dump_func, serialized_func_memo_info, outf, negative_one, NULL);
+        PyObject_CallFunctionObjArgs(cPickle_dump_func,
+                                     serialized_deps,
+                                     deps_outfile,
+                                     negative_one, NULL);
 
       // note that pickling might still fail if there's something inside
-      // of serialized_func_memo_info that's not picklable (sadly, our
+      // of serialized_deps that's not picklable (sadly, our
       // is_picklable() implementation doesn't pick up everything)
-      //
-      // ... we should ONLY add an entry to pickle_filenames
-      // if the pickling actually succeeded
       if (cPickle_dump_res) {
-        PyDict_SetItem(pickle_filenames, func_name, out_fn);
         Py_DECREF(cPickle_dump_res);
       }
       else {
         assert(PyErr_Occurred());
         PyErr_Clear();
 
-        PG_LOG_PRINTF("dict(event='WARNING', what='func_memo_info cannot be pickled', funcname='%s')\n",
+        PG_LOG_PRINTF("dict(event='WARNING', what='dependencies cannot be pickled', funcname='%s')\n",
                       PyString_AsString(func_name));
       }
 
-      Py_DECREF(outf);
-      Py_DECREF(out_fn);
-      Py_DECREF(serialized_func_memo_info);
+      Py_DECREF(deps_outfile);
+      Py_DECREF(serialized_deps);
+      Py_DECREF(deps_fn);
+
+      // separately pickle memoized vals list if it exists:
+      PyObject* memoized_vals_fn =
+        PyString_FromFormat("incpy-cache/%s.memoized_vals.pickle",
+                            PyString_AsString(basename));
+
+      if (func_memo_info->memoized_vals) {
+        PyObject* memoized_vals_outfile =
+          PyFile_FromString(PyString_AsString(memoized_vals_fn), "wb");
+        assert(memoized_vals_outfile);
+
+        // pass in -1 to force cPickle to use a binary protocol
+        PyObject* cPickle_dump_res =
+          PyObject_CallFunctionObjArgs(cPickle_dump_func,
+                                       func_memo_info->memoized_vals,
+                                       memoized_vals_outfile,
+                                       negative_one, NULL);
+        if (cPickle_dump_res) {
+          Py_DECREF(cPickle_dump_res);
+        }
+        else {
+          assert(PyErr_Occurred());
+          PyErr_Clear();
+
+          PG_LOG_PRINTF("dict(event='WARNING', what='memoized vals cannot be pickled', funcname='%s')\n",
+                        PyString_AsString(func_name));
+        }
+
+        Py_DECREF(memoized_vals_outfile);
+      }
+      else {
+        // REALLY important!!!  If memoized_vals is non-existent, then
+        // we should DELETE the corresponding pickle file since the LACK
+        // of a file corresponds to an empty memoized_vals ...
+        unlink(PyString_AsString(memoized_vals_fn));
+      }
+
+      Py_DECREF(memoized_vals_fn);
+      Py_DECREF(basename);
     }
   }
 
-
-  // write out filenames.pickle to disk
-
-  // open file in binary mode, since we're going to use a binary
-  // pickle protocol for efficiency
-  PyObject* pf = PyFile_FromString("incpy-cache/filenames.pickle", "wb");
-  assert(pf);
-  // pass in -1 to force cPickle to use a binary protocol
-  PyObject* filenames_dump_res =
-    PyObject_CallFunctionObjArgs(cPickle_dump_func, pickle_filenames, pf, negative_one, NULL);
-  Py_DECREF(pf);
-  Py_DECREF(filenames_dump_res);
-
   Py_DECREF(negative_one);
-
-  if (PyErr_Occurred()) {
-    PyErr_Print();
-    PyErr_Clear();
-  }
-
-  Py_CLEAR(pickle_filenames);
 
 
   // deallocate all FuncMemoInfo entries:
@@ -1661,7 +1660,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   // by now, all the dependencies are still satisfied ...
 
-  PyObject* memoized_vals_lst = f->func_memo_info->memoized_vals;
+  PyObject* memoized_vals_lst = get_memoized_vals_lst(f->func_memo_info);
 
   // try to find whether the function has been called before with
   // these arguments:
@@ -2209,7 +2208,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   /* now memoize results into func_memo_info['memoized_vals'], making
      sure to avoid duplicates */
   
-  PyObject* memoized_vals_lst = my_func_memo_info->memoized_vals;
+  PyObject* memoized_vals_lst = get_memoized_vals_lst(my_func_memo_info);
 
   int already_exists = 0;
 

@@ -78,6 +78,13 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
                 PyString_AsString(GET_CANONICAL_NAME(func_memo_info)));
 
   Py_CLEAR(func_memo_info->memoized_vals);
+
+  // ugly hack to prevent IncPy from trying to load the now-stale
+  // version of memoized_vals from disk and instead use the proper
+  // value, which is NULL (the now-stale XXX.memoized_vals.pickle file
+  // will be deleted at the end of execution)
+  func_memo_info->memoized_vals_loaded = 1;
+
   Py_CLEAR(func_memo_info->code_dependencies);
   Py_CLEAR(func_memo_info->global_var_dependencies);
   Py_CLEAR(func_memo_info->file_read_dependencies);
@@ -124,44 +131,37 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
   FuncMemoInfo* my_func_memo_info = NULL;
 
   // next, check to see whether it's stored in a .pickle file.
+  PyObject* basename = canonical_name_to_filename(cod->pg_canonical_name);
+  PyObject* pickle_filename = PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
+                                         PyString_AsString(basename));
+  Py_DECREF(basename);
+  assert (pickle_filename);
 
-  // consult pickle_filenames for the mapping between canonical_name
-  // and .pickle filename
-  PyObject* pickle_filename = PyDict_GetItem(pickle_filenames, cod->pg_canonical_name);
+  PyObject* pf = PyFile_FromString(PyString_AsString(pickle_filename), "r");
+  Py_DECREF(pickle_filename);
+  if (pf) {
+    // note that calling cPickle_load_func might cause other
+    // modules to be imported, since the pickle module loads
+    // modules as-needed depending on the types of the objects
+    // currently being unpickled
+    PyObject* serialized_func_memo_info = PyObject_CallFunctionObjArgs(cPickle_load_func, pf, NULL);
 
-  if (pickle_filename) {
-    // this file had better exist!
-    PyObject* pf = PyFile_FromString(PyString_AsString(pickle_filename), "r");
-    if (pf) {
-      // note that calling cPickle_load_func might cause other
-      // modules to be imported, since the pickle module loads
-      // modules as-needed depending on the types of the objects
-      // currently being unpickled
-      PyObject* serialized_func_memo_info = PyObject_CallFunctionObjArgs(cPickle_load_func, pf, NULL);
-
-      // only initialize my_func_memo_info if serialized_func_memo_info
-      // can be properly unpickled
-      if (!serialized_func_memo_info) {
-        assert(PyErr_Occurred());
-        PyErr_Clear();
-      }
-      else {
-        my_func_memo_info = deserialize_func_memo_info(serialized_func_memo_info, cod);
-        Py_DECREF(serialized_func_memo_info);
-      }
-
-      Py_DECREF(pf);
+    // only initialize my_func_memo_info if serialized_func_memo_info
+    // can be properly unpickled
+    if (!serialized_func_memo_info) {
+      assert(PyErr_Occurred());
+      PyErr_Clear();
     }
     else {
-      // croak if pickle file not found
-      assert(PyErr_Occurred());
-      PyErr_Print();
-      PG_LOG_PRINTF("dict(event='ERROR', why='PICKLE_FILE_NOT_FOUND', what='%s')\n",
-                    PyString_AsString(cod->pg_canonical_name));
-      fprintf(stderr, "\nFATAL ERROR: cache file %s not found.\nTry deleting incpy-cache/ sub-directory and starting over again.\n",
-              PyString_AsString(pickle_filename));
-      Py_Exit(1);
+      my_func_memo_info = deserialize_func_memo_info(serialized_func_memo_info, cod);
+      Py_DECREF(serialized_func_memo_info);
     }
+
+    Py_DECREF(pf);
+  }
+  else {
+    assert(PyErr_Occurred());
+    PyErr_Clear();
   }
 
   // if it's not found, then create a fresh new FuncMemoInfo.
@@ -186,22 +186,61 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
 }
 
 
-// Given a FuncMemoInfo, create a serialized version as a
-// newly-allocated dict.  The serialized version should be ready for
-// pickling.
-PyObject* serialize_func_memo_info(FuncMemoInfo* func_memo_info) {
+// retrieve and possibly lazy-load fmi->memoized_vals
+PyObject* get_memoized_vals_lst(FuncMemoInfo* fmi) {
+  // lazy-load optimization:
+  if (!fmi->memoized_vals_loaded) {
+    assert(!fmi->memoized_vals);
+
+    PyObject* basename = canonical_name_to_filename(GET_CANONICAL_NAME(fmi));
+
+    PyObject* memoized_vals_fn =
+      PyString_FromFormat("incpy-cache/%s.memoized_vals.pickle",
+                          PyString_AsString(basename));
+
+    PyObject* memoized_vals_infile =
+      PyFile_FromString(PyString_AsString(memoized_vals_fn), "r");
+
+    if (memoized_vals_infile) {
+      // this might be SLOW for a large memoized_vals_lst ...
+      fmi->memoized_vals =
+        PyObject_CallFunctionObjArgs(cPickle_load_func, memoized_vals_infile, NULL);
+
+      if (!fmi->memoized_vals) {
+        assert(PyErr_Occurred());
+        PyErr_Clear();
+        PG_LOG_PRINTF("dict(event='WARNING', what='cannot load memoized vals from disk', funcname='%s', filename='%s')\n",
+                        PyString_AsString(GET_CANONICAL_NAME(fmi)),
+                        PyString_AsString(memoized_vals_fn));
+      }
+      Py_DECREF(memoized_vals_infile);
+    }
+    else {
+      assert(PyErr_Occurred());
+      PyErr_Clear();
+    }
+
+    Py_DECREF(memoized_vals_fn);
+    Py_DECREF(basename);
+
+    // unconditionally set this to 1, so that we only attempt to load
+    // from disk ONCE per execution
+    fmi->memoized_vals_loaded = 1;
+  }
+
+  return fmi->memoized_vals;
+}
+
+
+// Given a FuncMemoInfo, create a serialized version of all of its
+// dependencies as a newly-allocated dict (ready for pickling).
+PyObject* serialize_func_memo_info_dependencies(FuncMemoInfo* func_memo_info) {
   PyObject* serialized_fmi = PyDict_New();
 
   assert(GET_CANONICAL_NAME(func_memo_info));
   PyDict_SetItemString(serialized_fmi,
                        "canonical_name",
                        GET_CANONICAL_NAME(func_memo_info));
-
-  if (func_memo_info->memoized_vals) {
-    PyDict_SetItemString(serialized_fmi,
-                         "memoized_vals",
-                         func_memo_info->memoized_vals);
-  }
 
   if (func_memo_info->global_var_dependencies) {
     PyDict_SetItemString(serialized_fmi,
@@ -245,12 +284,11 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
   assert(serialized_canonical_name);
   assert(_PyString_Eq(serialized_canonical_name, cod->pg_canonical_name));
 
-  PyObject* memoized_vals = 
-    PyDict_GetItemString(serialized_fmi, "memoized_vals");
-  if (memoized_vals) {
-    Py_INCREF(memoized_vals);
-    my_func_memo_info->memoized_vals = memoized_vals;
-  }
+
+  // Optimization: leave memoized_vals null for now and lazy-load it from
+  // disk when it's first needed (in get_memoized_vals_lst())
+  my_func_memo_info->memoized_vals = NULL;
+
 
   PyObject* global_var_dependencies = 
     PyDict_GetItemString(serialized_fmi, "global_var_dependencies");
