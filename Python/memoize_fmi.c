@@ -106,9 +106,6 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
 
   // it's now pure again until proven otherwise
   func_memo_info->is_impure = 0;
-
-  // force a writeback
-  func_memo_info->do_writeback = 1;
 }
 
 
@@ -172,8 +169,9 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
     my_func_memo_info = NEW_func_memo_info(cod);
     assert(my_func_memo_info);
 
-    // set writeback since it's a brand-new entry
-    my_func_memo_info->do_writeback = 1;
+    // force writeback of memoized_vals (dunno if this is strictly
+    // necessary, but just do it to be paranoid)
+    my_func_memo_info->memoized_vals_loaded = 1;
   }
 
   // add its address to all_func_memo_info_dict:

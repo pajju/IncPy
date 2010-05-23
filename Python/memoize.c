@@ -1191,52 +1191,52 @@ void pg_finalize() {
   while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
     FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyLong_AsLong(fmi_addr);
 
-    // Optimization: only store to disk entries with do_writeback enabled
-    if (func_memo_info->do_writeback) {
-      PyObject* func_name = GET_CANONICAL_NAME(func_memo_info);
+    PyObject* func_name = GET_CANONICAL_NAME(func_memo_info);
+    PyObject* basename = canonical_name_to_filename(func_name);
 
-      PyObject* basename = canonical_name_to_filename(func_name);
+    PyObject* deps_fn =
+      PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
+                          PyString_AsString(basename));
 
-      PyObject* deps_fn =
-        PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
-                            PyString_AsString(basename));
+    // pickle dependencies to disk:
+    PyObject* serialized_deps =
+      serialize_func_memo_info_dependencies(func_memo_info);
 
-      // pickle dependencies to disk:
-      PyObject* serialized_deps =
-        serialize_func_memo_info_dependencies(func_memo_info);
+    PyObject* deps_outfile = PyFile_FromString(PyString_AsString(deps_fn), "wb");
+    assert(deps_outfile);
+    // pass in -1 to force cPickle to use a binary protocol
+    PyObject* cPickle_dump_res =
+      PyObject_CallFunctionObjArgs(cPickle_dump_func,
+                                   serialized_deps,
+                                   deps_outfile,
+                                   negative_one, NULL);
 
-      PyObject* deps_outfile = PyFile_FromString(PyString_AsString(deps_fn), "wb");
-      assert(deps_outfile);
-      // pass in -1 to force cPickle to use a binary protocol
-      PyObject* cPickle_dump_res =
-        PyObject_CallFunctionObjArgs(cPickle_dump_func,
-                                     serialized_deps,
-                                     deps_outfile,
-                                     negative_one, NULL);
+    // note that pickling might still fail if there's something inside
+    // of serialized_deps that's not picklable (sadly, our
+    // is_picklable() implementation doesn't pick up everything)
+    if (cPickle_dump_res) {
+      Py_DECREF(cPickle_dump_res);
+    }
+    else {
+      assert(PyErr_Occurred());
+      PyErr_Clear();
 
-      // note that pickling might still fail if there's something inside
-      // of serialized_deps that's not picklable (sadly, our
-      // is_picklable() implementation doesn't pick up everything)
-      if (cPickle_dump_res) {
-        Py_DECREF(cPickle_dump_res);
-      }
-      else {
-        assert(PyErr_Occurred());
-        PyErr_Clear();
+      PG_LOG_PRINTF("dict(event='WARNING', what='dependencies cannot be pickled', funcname='%s')\n",
+                    PyString_AsString(func_name));
+    }
 
-        PG_LOG_PRINTF("dict(event='WARNING', what='dependencies cannot be pickled', funcname='%s')\n",
-                      PyString_AsString(func_name));
-      }
+    Py_DECREF(deps_outfile);
+    Py_DECREF(serialized_deps);
+    Py_DECREF(deps_fn);
 
-      Py_DECREF(deps_outfile);
-      Py_DECREF(serialized_deps);
-      Py_DECREF(deps_fn);
-
-      // separately pickle memoized vals list if it exists:
+    // separately pickle memoized vals ONLY IF it's been loaded
+    // from disk (or otherwise updated by a clear_cache_and_mark_pure)
+    if (func_memo_info->memoized_vals_loaded) {
       PyObject* memoized_vals_fn =
         PyString_FromFormat("incpy-cache/%s.memoized_vals.pickle",
                             PyString_AsString(basename));
 
+      // if it exists, then pickle it
       if (func_memo_info->memoized_vals) {
         PyObject* memoized_vals_outfile =
           PyFile_FromString(PyString_AsString(memoized_vals_fn), "wb");
@@ -1261,16 +1261,17 @@ void pg_finalize() {
 
         Py_DECREF(memoized_vals_outfile);
       }
+      // REALLY important!!!  If memoized_vals is non-existent, then
+      // we should DELETE the corresponding pickle file since the LACK
+      // of a file corresponds to an empty memoized_vals ...
       else {
-        // REALLY important!!!  If memoized_vals is non-existent, then
-        // we should DELETE the corresponding pickle file since the LACK
-        // of a file corresponds to an empty memoized_vals ...
         unlink(PyString_AsString(memoized_vals_fn));
       }
 
       Py_DECREF(memoized_vals_fn);
-      Py_DECREF(basename);
     }
+
+    Py_DECREF(basename);
   }
 
   Py_DECREF(negative_one);
@@ -1868,27 +1869,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
 // only reach here if you actually call the function, NOT if you skip it:
 pg_enter_frame_done:
-
-  /*
-    As a REALLY simple and conservative estimate, always writeback a
-    func_memo_info entry if you've actually CALLED that function (and
-    not if you've always been skipping it).
-
-    the rationale here is that if you actually call a function, it's
-    possible for values within its func_memo_info to mutate, but if
-    you've NEVER called a function, then it's not possible.
-
-    of course, this misses chances for optimization when you actually
-    call a function but NOTHING in its func_memo_info entry changes, but
-    it's a fine (and SAFE) first attempt
-
-    TODO: do finer-grained tracking of writebacks.  Warning:
-    Unfortunately, this really dirties up the code and might cause
-    subtle bugs if we forget to set the writeback in some cases :( */
-  if (f->func_memo_info) {
-    f->func_memo_info->do_writeback = 1;
-  }
-
 
   /* We can now use co_argcount to figure out how many parameters are
      passed on the top of the stack.  By this point, the top of the

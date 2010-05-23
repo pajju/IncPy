@@ -62,7 +62,6 @@ typedef struct {
   unsigned int last_dep_check_func_call_time;
 
   // booleans
-  char do_writeback; // Optimization: should we write back this entry to disk?
   char is_impure;    // is this function impure during THIS execution?
   char all_code_deps_SAT; // are all code dependencies satisfied during THIS execution?
   char memoized_vals_loaded; // have we attempted to load memoized_vals from disk yet?

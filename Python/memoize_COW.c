@@ -230,8 +230,6 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
     long fmi_addr_long = PyLong_AsLong(fmi_addr);
     FuncMemoInfo* func_memo_info = (FuncMemoInfo*)fmi_addr_long;
 
-    int need_to_writeback = 0;
-
     // first check global_var_dependencies
     PyObject* global_var_deps = func_memo_info->global_var_dependencies;
 
@@ -245,7 +243,6 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
           // i think it's okay to do a PyDict_SetItem while iterating
           // through it ... but double-check later to make sure (TODO)
           PyDict_SetItem(global_var_deps, varname, copy);
-          need_to_writeback = 1;
         }
       }
     }
@@ -270,7 +267,6 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
           if (val == objPtr) {
             Py_INCREF(copy); // ugh stupid refcounts - PyList_SetItem doesn't inc for us
             PyList_SetItem(args_lst, j, copy);
-            need_to_writeback = 1;
           }
         }
 
@@ -280,14 +276,8 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
         if (PyList_GET_ITEM(retval_lst, 0) == objPtr) {
           Py_INCREF(copy); // ugh stupid refcounts - PyList_SetItem doesn't inc for us
           PyList_SetItem(retval_lst, 0, copy);
-          need_to_writeback = 1;
         }
       }
-    }
-
-
-    if (need_to_writeback) {
-      func_memo_info->do_writeback = 1;
     }
   }
 
