@@ -5,35 +5,17 @@
 import os, sys, re
 import cPickle
 import pprint
+import hashlib
 
-
-# render one func_memo_info 'object', which is a dict
+# render a dependencies 'object', which is a dict
 # (side effect: DESTROYS fmi in the process of rendering it)
-def render_func_memo_info(fmi):
+def render_dependencies(fmi):
   all_keys = set(fmi.keys())
 
   print '==='
   canonical_name = fmi.pop('canonical_name')
   print canonical_name
   print '---'
-
-  try:
-    memoized_vals = fmi.pop('memoized_vals')
-    if memoized_vals:
-      print 'Memoized values:'
-      for e in memoized_vals:
-        retval = e['retval']
-        assert len(retval) == 1 # retval is formatted as a singleton list
-        retval = retval[0]
-        print ' ', e['args'], '->', retval,' (', e['runtime_ms'], 'ms )'
-        if 'stdout_buf' in e:
-          print '  stdout_buf:', repr(e['stdout_buf'])
-        if 'stderr_buf' in e:
-          print '  stderr_buf:', repr(e['stderr_buf'])
-
-  except KeyError:
-    print 'NO memoized values'
-  print
 
   try:
     file_read_dependencies = fmi.pop('file_read_dependencies')
@@ -75,26 +57,40 @@ def render_func_memo_info(fmi):
   assert len(fmi) == 0
 
 
+# render one memoized_vals 'object', which is a dict
+# (side effect: DESTROYS fmi in the process of rendering it)
+def render_memoized_vals(memoized_vals):
+  print 'Memoized vals:'
+  for e in memoized_vals:
+    retval = e['retval']
+    assert len(retval) == 1 # retval is formatted as a singleton list
+    retval = retval[0]
+    print ' ', e['args'], '->', retval,' (', e['runtime_ms'], 'ms )'
+    if 'stdout_buf' in e:
+      print '  stdout_buf:', repr(e['stdout_buf'])
+    if 'stderr_buf' in e:
+      print '  stderr_buf:', repr(e['stderr_buf'])
+
+
 def main(argv=None):
   if not argv: argv = sys.argv
   dirname = argv[1]
-  filenames_file = os.path.join(dirname, 'incpy-cache/filenames.pickle')
-  assert os.path.isfile(filenames_file), filenames_file
-  filenames_dict = cPickle.load(open(filenames_file))
-  func_names = sorted(filenames_dict.keys())
-  for func in func_names:
-    v = filenames_dict[func]
-    func_filename = os.path.join(dirname, v)
-    assert os.path.isfile(func_filename)
-    try:
-      func_dict = cPickle.load(open(func_filename))
-    except:
-      print "!!! Error loading pickle file for", func
-      continue
-    assert func == func_dict['canonical_name']
-    render_func_memo_info(func_dict)
-    del func_dict
-    print
+  assert os.path.isdir(dirname)
+
+  incpy_cache_dir = os.path.join(dirname, 'incpy-cache')
+  files_with_memoized_vals = [e for e in os.listdir(incpy_cache_dir) if 'memoized_vals' in e]
+
+  for f in files_with_memoized_vals:
+    (base, mv, pk) = f.split('.')
+    assert mv == 'memoized_vals'
+    assert pk == 'pickle'
+    deps_filename = base + '.dependencies.pickle'
+    assert os.path.isfile(os.path.join(incpy_cache_dir, deps_filename))
+    deps = cPickle.load(open(os.path.join(incpy_cache_dir, deps_filename)))
+    memoized_vals = cPickle.load(open(os.path.join(incpy_cache_dir, f)))
+    render_dependencies(deps)
+    render_memoized_vals(memoized_vals)
+    print '---'
 
   return 0
 
