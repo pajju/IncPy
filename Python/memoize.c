@@ -674,10 +674,11 @@ static PyObject* create_canonical_code_name(PyCodeObject* this_code) {
 }
 
 // simultaneously initialize the pg_ignore and pg_canonical_name
+// fields, and then call add_new_code_dep
 //
 // We do this at the time when a code object is created, so that we
 // don't have to do these checks every time a function is called.
-void pg_init_canonical_name_and_ignore(PyCodeObject* co) {
+void pg_init_new_code_object(PyCodeObject* co) {
   // set defaults ...
   co->pg_ignore = 1; // ignore unless we have a good reason NOT to
   co->pg_canonical_name = NULL;
@@ -711,6 +712,15 @@ void pg_init_canonical_name_and_ignore(PyCodeObject* co) {
 
      (prefix_in_ignore_paths_lst(co->co_filename)));
 
+
+  // pg_CREATE_FUNCTION_event should catch most code dependencies, but
+  // in order to catch nested functions (which aren't initialized by
+  // pg_CREATE_FUNCTION_event), we need to also make a call here ...
+  //
+  // (see IncPy-regression-tests/nested_function_1/ for details)
+  if (!co->pg_ignore) {
+    add_new_code_dep(co);
+  }
 
   MEMOIZE_PUBLIC_END()
 }
@@ -751,19 +761,11 @@ void add_new_code_dep(PyCodeObject* cod) {
   }
 }
 
-
-static void private_CREATE_FUNCTION(PyObject* func) {
-  assert(PyFunction_Check(func));
-
-  PyCodeObject* cod = (PyCodeObject*)((PyFunctionObject*)func)->func_code;
-  add_new_code_dep(cod);
-}
-
 // called when a new function object is created
-// (public-facing version that simply delegates to private version)
-void pg_CREATE_FUNCTION_event(PyObject* func) {
+void pg_CREATE_FUNCTION_event(PyFunctionObject* func) {
   MEMOIZE_PUBLIC_START()
-  private_CREATE_FUNCTION(func);
+  PyCodeObject* cod = (PyCodeObject*)(func->func_code);
+  add_new_code_dep(cod);
   MEMOIZE_PUBLIC_END()
 }
 
@@ -836,7 +838,7 @@ void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict) {
 
       // create a fresh new code_dependency object for the method
       // with its newly-set co_classname field
-      private_CREATE_FUNCTION(val);
+      add_new_code_dep(cod);
     }
   }
 

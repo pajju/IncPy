@@ -39,8 +39,10 @@ int obj_equals(PyObject* obj1, PyObject* obj2);
 void add_new_code_dep(PyCodeObject* cod);
 
 // hook from PyCode_New()
-void pg_init_canonical_name_and_ignore(PyCodeObject* co);
+void pg_init_new_code_object(PyCodeObject* co);
 
+// handler for PyFunction_New()
+void pg_CREATE_FUNCTION_event(PyFunctionObject* func);
 
 void pg_initialize(void);
 void pg_finalize(void);
@@ -62,9 +64,6 @@ void pg_STORE_DEL_GLOBAL_event(PyObject *varname);
 // deleting one of its attributes (e.g., in an instance) or items (e.g.,
 // in a sequence)
 void pg_about_to_MUTATE_event(PyObject *object);
-
-// handler for PyFunction_New()
-void pg_CREATE_FUNCTION_event(PyObject* func);
 
 // handler for BUILD_CLASS opcode
 void pg_BUILD_CLASS_event(PyObject* name, PyObject* methods_dict);
