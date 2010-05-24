@@ -42,10 +42,17 @@ typedef struct {
 
   // all of these fields are serialized to disk as:
   //   incpy-cache/XXX.dependencies.pickle
-  PyObject* code_dependencies;        // Dict
   PyObject* global_var_dependencies;  // Dict
   PyObject* file_read_dependencies;   // Dict
   PyObject* file_write_dependencies;  // Dict
+
+  // code dependency 'object' (Dict) representing the saved state of
+  // this function's code
+  PyObject* self_code_dependency;
+
+  // Set of canonical names of functions that this function DIRECTLY called
+  // (used for computing transitive dependencies)
+  PyObject* called_funcs_set;
 
 
   // these fields are NOT serialized to disk
@@ -63,7 +70,7 @@ typedef struct {
 
   // booleans
   char is_impure;    // is this function impure during THIS execution?
-  char all_code_deps_SAT; // are all code dependencies satisfied during THIS execution?
+  char self_code_dependency_SAT; // is self_code_dependency satisfied for THIS execution?
   char memoized_vals_loaded; // have we attempted to load memoized_vals from disk yet?
 
 } FuncMemoInfo;
