@@ -12,10 +12,9 @@ import hashlib
 def render_dependencies(fmi):
   all_keys = set(fmi.keys())
 
-  print '==='
   canonical_name = fmi.pop('canonical_name')
-  print canonical_name
-  print '---'
+  print '===', canonical_name, '==='
+  print
 
   try:
     file_read_dependencies = fmi.pop('file_read_dependencies')
@@ -44,14 +43,16 @@ def render_dependencies(fmi):
     pass
 
   try:
-    code_dependencies = fmi.pop('code_dependencies')
-    if code_dependencies:
-      print 'Code dependencies:'
-      for func_name in sorted(code_dependencies.keys()):
+    called_funcs_set = fmi.pop('called_funcs_set')
+    if called_funcs_set:
+      print 'Called functions:'
+      for func_name in sorted(called_funcs_set):
         print ' ', func_name
       print
   except KeyError:
     pass
+
+  assert fmi.pop('self_code_dependency') # pop this but don't bother rendering it
 
   # make sure we've rendered them all!
   assert len(fmi) == 0
