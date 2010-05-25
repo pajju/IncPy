@@ -168,9 +168,9 @@ static PyObject* numpy_module = NULL;
 // forward declarations:
 static void mark_impure(PyFrameObject* f, char* why);
 static void mark_entire_stack_impure(char* why);
-static void copy_and_add_global_var_dependency(PyObject* varname,
-                                               PyObject* value,
-                                               FuncMemoInfo* func_memo_info);
+static void deepcopy_global_and_add_to_dict(PyObject* varname,
+                                            PyObject* value,
+                                            PyObject* output_dict);
 
 // to shut gcc up ...
 extern time_t PyOS_GetLastModificationTime(char *, FILE *);
@@ -1913,44 +1913,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   }
 
 
-  /* Optimization: When we execute a LOAD of a global or
-     globally-reachable value, we simply add its NAME to
-     PyEval_GetFrame()->globals_read_set but NOT a dependency on it.  We defer
-     the adding of dependencies until the END of a frame's execution.
-   
-     Grabbing the global variable values at this time is always safe
-     because they are guaranteed to have the SAME VALUES as when they
-     were read earlier during this function's invocation.  If the values
-     were mutated, then the entire stack would've been marked impure
-     anyways, so we wouldn't be memoizing this invocation!
-  
-     For correctness, we must do this at the exit of every PURE
-     function, not merely for functions that are going to be memoized.
-     That's because we need to track transitive global variable
-     dependencies.  e.g., if foo calls bar and bar reads a global X,
-     then even if bar isn't memoized, if foo is memoized, it must know
-     that bar depends on global X, since it itself transitively depends
-     on X as well. */
-  if (f->globals_read_set) {
-    Py_ssize_t pos = 0;
-    PyObject* global_varname_tuple;
-    while (_PySet_Next(f->globals_read_set, &pos, &global_varname_tuple)) {
-      PyObject* val = find_globally_reachable_obj_by_name(global_varname_tuple, f);
-
-      if (val) {
-        copy_and_add_global_var_dependency(global_varname_tuple, val, my_func_memo_info);
-      }
-      else {
-#ifdef ENABLE_DEBUG_LOGGING
-        PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
-        PG_LOG_PRINTF("dict(event='WARNING', what='global var not found in top_frame->f_globals', varname=\"%s\")\n", PyString_AsString(tmp_str));
-        Py_DECREF(tmp_str);
-#endif // ENABLE_DEBUG_LOGGING
-      }
-    }
-  }
-
-
   // don't bother memoizing results of short-running functions
   if (runtime_ms <= memoize_time_limit_ms) {
     // don't forget to clean up!
@@ -2125,16 +2087,95 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   assert(Py_REFCNT(retval_copy) > 0);
 
 
-  // if we've made it this far, that means that all files in
-  // files_written_set were written in self-contained writes, so their
-  // last modification times can be memoized
-  if (f->files_written_set) {
-    // lazy initialize
-    if (!my_func_memo_info->file_write_dependencies) {
-      my_func_memo_info->file_write_dependencies = PyDict_New();
+  // now memoize results into func_memo_info['memoized_vals']:
+
+  PyObject* memoized_vals_lst = get_memoized_vals_lst(my_func_memo_info);
+
+  // Note that the return value will always be a list of exactly ONE
+  // element, but it's a list to facilitate mutation if you do COW
+  // optimization
+  PyObject* retval_lst = PyList_New(1);
+  Py_INCREF(retval_copy); // ugh, stupid refcounts!
+  PyList_SET_ITEM(retval_lst, 0, retval_copy); // this does NOT incref retval_copy
+
+  PyObject* memo_table_entry = PyDict_New();
+  PyDict_SetItemString(memo_table_entry, "args", stored_args_lst_copy);
+  PyDict_SetItemString(memo_table_entry, "retval", retval_lst);
+  Py_DECREF(retval_lst);
+
+  PyObject* runtime_ms_obj = PyLong_FromLong(runtime_ms);
+  PyDict_SetItemString(memo_table_entry, "runtime_ms", runtime_ms_obj);
+  Py_DECREF(runtime_ms_obj);
+
+  // add OPTIONAL fields of memo_table_entry ...
+  if (f->stdout_cStringIO) {
+    PyObject* stdout_val = PycStringIO->cgetvalue(f->stdout_cStringIO);
+    assert(stdout_val);
+    PyDict_SetItemString(memo_table_entry, "stdout_buf", stdout_val);
+    Py_DECREF(stdout_val);
+  }
+
+  if (f->stderr_cStringIO) {
+    PyObject* stderr_val = PycStringIO->cgetvalue(f->stderr_cStringIO);
+    assert(stderr_val);
+    PyDict_SetItemString(memo_table_entry, "stderr_buf", stderr_val);
+    Py_DECREF(stderr_val);
+  }
+
+  if (f->globals_read_set) {
+    PyObject* globals_read = PyDict_New();
+
+    Py_ssize_t s_pos = 0;
+    PyObject* global_varname_tuple;
+    while (_PySet_Next(f->globals_read_set, &s_pos, &global_varname_tuple)) {
+      PyObject* val = find_globally_reachable_obj_by_name(global_varname_tuple, f);
+
+      if (val) {
+        deepcopy_global_and_add_to_dict(global_varname_tuple, val, globals_read);
+      }
+      else {
+#ifdef ENABLE_DEBUG_LOGGING
+        PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
+        PG_LOG_PRINTF("dict(event='WARNING', what='global var not found in top_frame->f_globals', varname=\"%s\")\n", PyString_AsString(tmp_str));
+        Py_DECREF(tmp_str);
+#endif // ENABLE_DEBUG_LOGGING
+      }
     }
 
-    PyObject* files_written_dict = my_func_memo_info->file_write_dependencies;
+    PyDict_SetItemString(memo_table_entry, "globals_read", globals_read);
+    Py_DECREF(globals_read);
+  }
+
+  if (f->files_read_set) {
+    PyObject* files_read = PyDict_New();
+
+    // TODO: what should we do about inserting duplicates?
+
+    Py_ssize_t s_pos = 0;
+    PyObject* read_filename;
+    while (_PySet_Next(f->files_read_set, &s_pos, &read_filename)) {
+      char* filename_cstr = PyString_AsString(read_filename);
+      FILE* fp = fopen(filename_cstr, "r");
+      // it's possible that this file no longer exists (e.g., it was a
+      // temp file that already got deleted) ... right now, let's punt
+      // on those files, but perhaps there should be a better solution
+      // in the future:
+      if (fp) {
+        time_t mtime = PyOS_GetLastModificationTime(filename_cstr, fp);
+        fclose(fp);
+        assert (mtime >= 0); // -1 is an error value
+        PyObject* mtime_obj = PyLong_FromLong((long)mtime);
+        PyDict_SetItem(files_read, read_filename, mtime_obj);
+        Py_DECREF(mtime_obj);
+      }
+    }
+
+    PyDict_SetItemString(memo_table_entry, "files_read", files_read);
+    Py_DECREF(files_read);
+  }
+
+  if (f->files_written_set) {
+    PyObject* files_written = PyDict_New();
 
     // TODO: what should we do about inserting duplicates?
 
@@ -2152,95 +2193,34 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
         fclose(fp);
         assert (mtime >= 0); // -1 is an error value
         PyObject* mtime_obj = PyLong_FromLong((long)mtime);
-        PyDict_SetItem(files_written_dict, written_filename, mtime_obj);
+        PyDict_SetItem(files_written, written_filename, mtime_obj);
         Py_DECREF(mtime_obj);
       }
     }
+
+    PyDict_SetItemString(memo_table_entry, "files_written", files_written);
+    Py_DECREF(files_written);
   }
 
-
-  /* now memoize results into func_memo_info['memoized_vals'], making
-     sure to avoid duplicates */
-  
-  PyObject* memoized_vals_lst = get_memoized_vals_lst(my_func_memo_info);
-
-  int already_exists = 0;
-
-  if (memoized_vals_lst) {
-    // let's do the (potentially) less efficient thing of iterating 
-    // by index, since I can't figure out how to properly use iterators
-    // TODO: refactor to use Python iterators if it's more efficient
-    for (i = 0; i < PyList_Size(memoized_vals_lst); i++) {
-      PyObject* elt = PyList_GET_ITEM(memoized_vals_lst, i);
-      assert(PyDict_CheckExact(elt));
-      PyObject* memoized_arg_lst = PyDict_GetItemString(elt, "args");
-      assert(memoized_arg_lst);
-      // obj_equals is potentially expensive to compute ...
-      // especially when you're LINEARLY iterating through memoized_vals_lst
-      if (lst_equals(memoized_arg_lst, stored_args_lst_copy)) {
-        // PUNT on this check, since it can be quite expensive to compute:
-        /*
-        PyObject* memoized_retval = PyTuple_GetItem(elt, 1);
-        assert(obj_equals(memoized_retval, retval_copy));
-        */
-        already_exists = 1;
-        break;
-      }
-    }
+  // lazy initialize
+  if (!memoized_vals_lst) {
+    my_func_memo_info->memoized_vals = memoized_vals_lst = PyList_New(0);
   }
 
-  if (!already_exists) {
-    // Note that the return value will always be a list of exactly ONE
-    // element, but it's a list to facilitate mutation if you do COW
-    // optimization
-    PyObject* retval_lst = PyList_New(1);
-    Py_INCREF(retval_copy); // ugh, stupid refcounts!
-    PyList_SET_ITEM(retval_lst, 0, retval_copy); // this does NOT incref retval_copy
+  // we're just gonna blindly append memo_table_entry assuming that
+  // there are no 'duplicates' in memoized_vals_lst
+  // (if this assumption is violated, then we will get some
+  // funny-looking results ... but I think I should be able to convince
+  // myself of why duplicates should never occur)
+  PyList_Append(memoized_vals_lst, memo_table_entry);
+  Py_DECREF(memo_table_entry);
 
-    PyObject* memo_table_entry = PyDict_New();
-    PyDict_SetItemString(memo_table_entry, "args", stored_args_lst_copy);
-    PyDict_SetItemString(memo_table_entry, "retval", retval_lst);
-    Py_DECREF(retval_lst);
-
-    PyObject* runtime_ms_obj = PyLong_FromLong(runtime_ms);
-    PyDict_SetItemString(memo_table_entry, "runtime_ms", runtime_ms_obj);
-    Py_DECREF(runtime_ms_obj);
-
-    // add OPTIONAL fields of memo_table_entry ...
-    if (f->stdout_cStringIO) {
-      PyObject* stdout_val = PycStringIO->cgetvalue(f->stdout_cStringIO);
-      assert(stdout_val);
-      PyDict_SetItemString(memo_table_entry, "stdout_buf", stdout_val);
-      Py_DECREF(stdout_val);
-    }
-
-    if (f->stderr_cStringIO) {
-      PyObject* stderr_val = PycStringIO->cgetvalue(f->stderr_cStringIO);
-      assert(stderr_val);
-      PyDict_SetItemString(memo_table_entry, "stderr_buf", stderr_val);
-      Py_DECREF(stderr_val);
-    }
-
-    // lazy initialize
-    if (!memoized_vals_lst) {
-      my_func_memo_info->memoized_vals = memoized_vals_lst = PyList_New(0);
-    }
-
-    PyList_Append(memoized_vals_lst, memo_table_entry);
-    Py_DECREF(memo_table_entry);
-
-    PG_LOG_PRINTF("dict(event='MEMOIZED_RESULTS', what='%s', runtime_ms='%ld')\n",
+  PG_LOG_PRINTF("dict(event='MEMOIZED_RESULTS', what='%s', runtime_ms='%ld')\n",
+                PyString_AsString(canonical_name),
+                runtime_ms);
+  USER_LOG_PRINTF("MEMOIZED %s | runtime %ld ms\n",
                   PyString_AsString(canonical_name),
                   runtime_ms);
-    USER_LOG_PRINTF("MEMOIZED %s | runtime %ld ms\n",
-                    PyString_AsString(canonical_name),
-                    runtime_ms);
-  }
-  else {
-    PG_LOG_PRINTF("dict(event='DO_NOT_MEMOIZE_DUPLICATE', what='%s', runtime_ms='%ld')\n",
-                  PyString_AsString(canonical_name),
-                  runtime_ms);
-  }
 
   Py_DECREF(retval_copy); // subtle but important for preventing leaks
 
@@ -2253,52 +2233,37 @@ pg_exit_frame_done:
 }
 
 
-// Add a global variable dependency to func_memo_info mapping varname to
-// value
+// perform: output_dict[varname] = deepcopy(value)
+//
+// (punting on values that cannot be safely pickled)
 //
 //   varname can be munged by find_globally_reachable_obj_by_name()
 //   (it's either a string or a tuple of strings)
-static void copy_and_add_global_var_dependency(PyObject* varname,
-                                               PyObject* value,
-                                               FuncMemoInfo* func_memo_info) {
+static void deepcopy_global_and_add_to_dict(PyObject* varname,
+                                            PyObject* value,
+                                            PyObject* output_dict) {
   // quick-check since a lot of passed-in values are modules,
   // which are NOT picklable ... seems to speed things up slightly
   if (PyModule_CheckExact(value)) {
     return;
   }
 
-  PyObject* global_var_dependencies = func_memo_info->global_var_dependencies;
-
-  /* if varname is already in here, then don't bother to add it again
-     since we only need to add the global var. value ONCE (the first
-     time).  the reason why we don't need to add it again is that if its
-     value has been mutated, then global_var_dependencies would have
-     been CLEARED, either by a call to mark_impure() or to
-     clear_cache_and_mark_pure() due to its dependency being broken */
-  if (global_var_dependencies && PyDict_Contains(global_var_dependencies, varname)) {
-    return;
-  }
-
-
-  /* don't bother adding global variable dependencies on objects that
-     don't implement any form of non-identity-based comparison (e.g.,
-     using __eq__ or __cmp__ methods), since in those cases, there is no
-     way that we can possibly MATCH THEM UP with their original
-     incarnations once we load the memoized dependencies from disk (the
-     version loaded from disk will be a different object than the one in
-     memory, so '==' will ALWAYS FAIL if a comparison method isn't
-     implemented)
+  /* don't bother adding objects that don't implement any form of
+     non-identity-based comparison (e.g., using __eq__ or __cmp__
+     methods), since in those cases, there is no way that we can
+     possibly MATCH THEM UP with their original incarnations once we
+     load the memoized values from disk (the version loaded from disk
+     will be a different object than the one in memory, so '==' will
+     ALWAYS FAIL if a comparison method isn't implemented)
 
      for speed purposes, do this BEFORE checking for is_picklable() since
-     has_comparison_method() is much faster!
-
-   */
+     has_comparison_method() is much faster! */
   if (!has_comparison_method(value)) {
 
 #ifdef ENABLE_DEBUG_LOGGING
     PyObject* tmp_str = PyObject_Repr(varname);
     char* varname_str = PyString_AsString(tmp_str);
-    PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to a global var whose type has no comparison method', varname=\"%s\", type='%s')\n",
+    PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot track global var whose type has no comparison method', varname=\"%s\", type='%s')\n",
                   varname_str, Py_TYPE(value)->tp_name);
     Py_DECREF(tmp_str);
 #endif // ENABLE_DEBUG_LOGGING
@@ -2307,7 +2272,7 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
   }
 
 
-  // don't bother copying or storing these dependencies, since they're
+  // don't bother storing these values, since they're
   // probably immutable anyhow (and can't be pickled)
   // (this check can be rather slow, so avoid doing it if possible)
   if (!is_picklable(value)) {
@@ -2318,7 +2283,7 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
     if (!DEFINITELY_NOT_PICKLABLE(value)) {
       PyObject* tmp_str = PyObject_Repr(varname);
       char* varname_str = PyString_AsString(tmp_str);
-      PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot add dependency to unpicklable global var', varname=\"%s\", type='%s')\n",
+      PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot track unpicklable global var', varname=\"%s\", type='%s')\n",
                     varname_str, Py_TYPE(value)->tp_name);
       Py_DECREF(tmp_str);
     }
@@ -2326,13 +2291,6 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
 
     return;
   }
-
-
-  // lazy initialize
-  if (!global_var_dependencies) {
-    func_memo_info->global_var_dependencies = global_var_dependencies = PyDict_New();
-  }
-
 
 
 #ifdef ENABLE_COW
@@ -2346,10 +2304,10 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
 	PyObject* global_val_copy = deepcopy(value);
 #endif // ENABLE_COW
 
-  // if the deepcopy was successful, add it to global_var_dependencies
+  // if the deepcopy was successful, add it to output_dict
   if (global_val_copy) {
     assert(Py_REFCNT(global_val_copy) > 0);
-    PyDict_SetItem(global_var_dependencies, varname, global_val_copy); // this DOES incref global_val_copy
+    PyDict_SetItem(output_dict, varname, global_val_copy); // this DOES incref global_val_copy
     Py_DECREF(global_val_copy); // necessary to prevent leaks
   }
   // Otherwise, if the deepcopy failed, log a warning and punt for now.
@@ -2359,7 +2317,11 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
   // TODO: a conservative alternative is just to mark the entire
   // stack impure whenever an unsoundness warning is issued
   else {
-    PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot deepcopy global var <compound tuple name>', type='%s')\n", Py_TYPE(value)->tp_name);
+#ifdef ENABLE_DEBUG_LOGGING
+    PyObject* tmp_str = PyObject_Repr(varname);
+    PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot deepcopy global var', varname='%s', type='%s')\n", PyString_AsString(tmp_str), Py_TYPE(value)->tp_name);
+    Py_DECREF(tmp_str);
+#endif // ENABLE_DEBUG_LOGGING
 
     assert(PyErr_Occurred());
     PyErr_Clear();
@@ -2367,22 +2329,25 @@ static void copy_and_add_global_var_dependency(PyObject* varname,
 }
 
 
-static void add_global_read_to_top_frame(PyObject* global_container) {
+static void add_global_read_to_all_frames(PyObject* global_container) {
   assert(global_container);
 
-  PyFrameObject* top_frame = PyEval_GetFrame();
+  PyFrameObject* f = PyEval_GetFrame();
+  while (f) {
+    if (f->func_memo_info) {
+      /* Optimization: When we execute a LOAD of a global or
+         globally-reachable value, we simply add its NAME to
+         globals_read_set but NOT a dependency on it.  We defer the adding
+         of dependencies until the END of a frame's execution.
 
-  // add to the set of globals read by this frame:
-  if (top_frame && top_frame->func_memo_info) {
-    // Optimization: if global_container is already in
-    // global_var_dependencies, there's no point in double-adding:
-    if (top_frame->func_memo_info->global_var_dependencies &&
-        PyDict_Contains(top_frame->func_memo_info->global_var_dependencies,
-                        global_container)) {
-      return;
+         Grabbing the global variable values at this time is always safe
+         because they are guaranteed to have the SAME VALUES as when they
+         were read earlier during this function's invocation.  If the
+         values were mutated, then the entire stack would've been marked
+         impure anyways, so we wouldn't be memoizing this invocation! */
+      LAZY_INIT_SET_ADD(f->globals_read_set, global_container);
     }
-
-    LAZY_INIT_SET_ADD(top_frame->globals_read_set, global_container);
+    f = f->f_back;
   }
 }
 
@@ -2422,7 +2387,7 @@ void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value) {
   else {
     new_varname = create_varname_tuple(top_frame->f_code->co_filename, varname);
 
-    add_global_read_to_top_frame(new_varname);
+    add_global_read_to_all_frames(new_varname);
   }
   assert(new_varname);
 
@@ -2499,7 +2464,7 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value) {
       // originate from a file whose code we want to ignore ...
       if (strcmp(PyString_AsString(PyTuple_GET_ITEM(new_varname, 0)),
                  "IGNORE") != 0) {
-        add_global_read_to_top_frame(new_varname);
+        add_global_read_to_all_frames(new_varname);
       }
 
       update_global_container_weakref(value, new_varname);
