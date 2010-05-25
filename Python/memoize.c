@@ -744,7 +744,7 @@ void add_new_code_dep(PyCodeObject* cod) {
     Py_DECREF(new_code_dependency);
 
     /* This is overkill, but what we're gonna do is clear the
-       self_code_dependency_SAT fields of ALL currently-existing FuncMemoInfo
+       all_code_deps_SAT fields of ALL currently-existing FuncMemoInfo
        entries, since their code dependencies might have changed because
        new code might have been loaded for the SAME function name.  This
        can happen when files are loaded with execfile(), which shells
@@ -765,7 +765,7 @@ void add_new_code_dep(PyCodeObject* cod) {
     Py_ssize_t pos = 0; // reset it!
     while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
       FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyLong_AsLong(fmi_addr);
-      func_memo_info->self_code_dependency_SAT = 0;
+      func_memo_info->all_code_deps_SAT = 0;
     }
   }
 }
@@ -1367,46 +1367,50 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
   // called recursively):
   char* cur_func_name_str = PyString_AsString(GET_CANONICAL_NAME(cur_frame->func_memo_info));
 
-  // Code dependency (on your own code, will check your callees within
-  // the recursive calls):
+  // Code dependencies:
 
-  assert(my_func_memo_info->self_code_dependency);
+  // you must at least have a code dependency on YOURSELF
+  assert(my_func_memo_info->code_dependencies);
 
   // Optimization: assuming that code doesn't change in the middle of
-  // execution (which is a prety safe assumption), we only need to do
+  // execution (which is a pretty safe assumption), we only need to do
   // this check ONCE at the beginning of execution and not on each call 
   //
   // Caveat: if code is re-loaded in the middle of execution, it CAN
-  // actually change, so self_code_dependency_SAT must be set to 0 in those
-  // cases (grep for 'self_code_dependency_SAT' to see where that occurs)
-  if (!my_func_memo_info->self_code_dependency_SAT) {
-    PyObject* cn = GET_CANONICAL_NAME(my_func_memo_info);
-    char* cn_str = PyString_AsString(cn);
+  // actually change, so all_code_deps_SAT must be set to 0 in those
+  // cases (grep for 'all_code_deps_SAT' to see where that occurs)
+  if (!my_func_memo_info->all_code_deps_SAT) {
+    PyObject* dependent_func_canonical_name = NULL;
+    PyObject* memoized_code_dependency = NULL;
+    pos = 0; // reset it!
+    while (PyDict_Next(my_func_memo_info->code_dependencies,
+                       &pos, &dependent_func_canonical_name, &memoized_code_dependency)) {
+      PyObject* cur_code_dependency =
+        PyDict_GetItem(func_name_to_code_dependency, dependent_func_canonical_name);
 
-    PyObject* cur_code_dependency = PyDict_GetItem(func_name_to_code_dependency, cn);
-
-    // if the function is NOT FOUND or its code has changed, then
-    // that code dependency is definitely broken
-    if (!cur_code_dependency) {
-      PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_NOT_FOUND', what='%s')\n",
-                    cn_str);
-      USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s not found\n",
-                      cur_func_name_str, cn_str);
-      return 0;
-    }
-    else if (!code_dependency_EQ(cur_code_dependency,
-                                 my_func_memo_info->self_code_dependency)) {
-      PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_CHANGED', what='%s')\n",
-                    cn_str);
-      USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s changed\n",
-                      cur_func_name_str, cn_str);
-      return 0;
+      char* dependent_func_name_str = PyString_AsString(dependent_func_canonical_name);
+      // if the function is NOT FOUND or its code has changed, then
+      // that code dependency is definitely broken
+      if (!cur_code_dependency) {
+        PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_NOT_FOUND', what='%s')\n",
+                      dependent_func_name_str);
+        USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s not found\n",
+                        cur_func_name_str, dependent_func_name_str);
+        return 0;
+      }
+      else if (!code_dependency_EQ(cur_code_dependency, memoized_code_dependency)) {
+        PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_CHANGED', what='%s')\n",
+                      dependent_func_name_str);
+        USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s changed\n",
+                        cur_func_name_str, dependent_func_name_str);
+        return 0;
+      }
     }
 
     // if we make it this far without hitting an early 'return 0',
-    // then this function's self code dependency is satisfied for this
+    // then this function's code dependencies are satisfied for this
     // particular script execution, so we don't have to check it again:
-    my_func_memo_info->self_code_dependency_SAT = 1;
+    my_func_memo_info->all_code_deps_SAT = 1;
   }
 
 
@@ -1554,40 +1558,31 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
   // below recursive calls fail ...
   int all_child_dependencies_satisfied = 1;
 
-  // ok, now we've gotta recurse inside of all your called functions
-  // and check whether all of their dependencies are also met:
-  if (my_func_memo_info->called_funcs_set) {
-    pos = 0; // reset it!
-    PyObject* called_func_name = NULL;
+  // ok, now we've gotta recurse inside of all your code dependencies
+  // and check whether they're all met as well:
 
-    while (_PySet_Next(my_func_memo_info->called_funcs_set, &pos, &called_func_name)) {
-      PyObject* called_func_cod = PyDict_GetItem(func_name_to_code_object, called_func_name);
+  PyObject* called_func_name = NULL;
+  PyObject* unused_junk = NULL;
+  pos = 0; // reset it!
+  while (PyDict_Next(my_func_memo_info->code_dependencies,
+                     &pos, &called_func_name, &unused_junk)) {
+    PyObject* called_func_cod = PyDict_GetItem(func_name_to_code_object, called_func_name);
+    assert(PyCode_Check(called_func_cod));
+    FuncMemoInfo* called_func_memo_info =
+      get_func_memo_info_from_cod((PyCodeObject*)called_func_cod);
 
-      if (!called_func_cod) {
-        PG_LOG_PRINTF("dict(event='TRANSITIVE_DEPENDENCY_BROKEN', why='CALLEE_CODE_NOT_FOUND', what='%s')\n",
-                      PyString_AsString(called_func_name));
-        USER_LOG_PRINTF("TRANSITIVE_DEPENDENCY_BROKEN %s | callee not found: %s\n",
-                        cur_func_name_str, PyString_AsString(called_func_name));
-        return 0;
-      }
+    assert(called_func_memo_info);
 
-      assert(PyCode_Check(called_func_cod));
+    // don't recurse on a function that we've already checked, or else
+    // you will infinite loop:
+    if (my_func_memo_info->last_dep_check_func_call_time ==
+        called_func_memo_info->last_dep_check_func_call_time) {
+      continue;
+    }
 
-      FuncMemoInfo* called_func_memo_info =
-        get_func_memo_info_from_cod((PyCodeObject*)called_func_cod);
-      assert(called_func_memo_info);
-
-      // don't recurse on a function that we've already checked, or else
-      // you will infinite loop:
-      if (my_func_memo_info->last_dep_check_func_call_time ==
-          called_func_memo_info->last_dep_check_func_call_time) {
-        continue;
-      }
-
-      if (!are_dependencies_satisfied(called_func_memo_info, cur_frame)) {
-        all_child_dependencies_satisfied = 0;
-        break;
-      }
+    if (!are_dependencies_satisfied(called_func_memo_info, cur_frame)) {
+      all_child_dependencies_satisfied = 0;
+      break;
     }
   }
 
@@ -1636,13 +1631,27 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   f->func_memo_info = get_func_memo_info_from_cod(co);
 
-  // add yourself to your caller's called_funcs_set
+  // update your caller with a code dependency on you
   if (f->f_back) {
     FuncMemoInfo* caller_func_memo_info = f->f_back->func_memo_info;
 
     // caller_func_memo_info doesn't exist for top-level modules:
     if (caller_func_memo_info) {
-      LAZY_INIT_SET_ADD(caller_func_memo_info->called_funcs_set, co->pg_canonical_name);
+      PyObject* caller_code_deps = caller_func_memo_info->code_dependencies;
+      assert(caller_code_deps);
+
+      // Optimizaton: avoid adding duplicates (there will be MANY duplicates
+      // throughout a long-running script with lots of function calls)
+      if (!PyDict_Contains(caller_code_deps, co->pg_canonical_name)) {
+        // add a code dependency in your caller to the most up-to-date
+        // code for THIS function (not a previously-saved version of the
+        // code, since later we might discover it to be outdated!)
+        PyObject* my_self_code_dependency =
+          PyDict_GetItem(func_name_to_code_dependency, co->pg_canonical_name);
+        assert(my_self_code_dependency);
+
+        PyDict_SetItem(caller_code_deps, co->pg_canonical_name, my_self_code_dependency);
+      }
     }
   }
 
