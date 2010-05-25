@@ -64,10 +64,6 @@ void DELETE_func_memo_info(FuncMemoInfo* fmi) {
   Py_CLEAR(fmi->memoized_vals);
   Py_CLEAR(fmi->code_dependencies);
 
-  Py_CLEAR(fmi->global_var_dependencies);
-  Py_CLEAR(fmi->file_read_dependencies);
-  Py_CLEAR(fmi->file_write_dependencies);
-
   Py_CLEAR(fmi->f_code);
 
   PyMem_Del(fmi);
@@ -87,9 +83,6 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
   func_memo_info->memoized_vals_loaded = 1;
 
   Py_CLEAR(func_memo_info->code_dependencies);
-  Py_CLEAR(func_memo_info->global_var_dependencies);
-  Py_CLEAR(func_memo_info->file_read_dependencies);
-  Py_CLEAR(func_memo_info->file_write_dependencies);
 
   // re-insert self code dependency since you still have a dependency on
   // your own code.  Note that we are grabbing it from
@@ -241,28 +234,10 @@ PyObject* serialize_func_memo_info_dependencies(FuncMemoInfo* func_memo_info) {
                        "canonical_name",
                        GET_CANONICAL_NAME(func_memo_info));
 
-  if (func_memo_info->global_var_dependencies) {
-    PyDict_SetItemString(serialized_fmi,
-                         "global_var_dependencies",
-                         func_memo_info->global_var_dependencies);
-  }
-
   if (func_memo_info->code_dependencies) {
     PyDict_SetItemString(serialized_fmi,
                          "code_dependencies",
                          func_memo_info->code_dependencies);
-  }
-
-  if (func_memo_info->file_read_dependencies) {
-    PyDict_SetItemString(serialized_fmi,
-                         "file_read_dependencies",
-                         func_memo_info->file_read_dependencies);
-  }
-
-  if (func_memo_info->file_write_dependencies) {
-    PyDict_SetItemString(serialized_fmi,
-                         "file_write_dependencies",
-                         func_memo_info->file_write_dependencies);
   }
 
   return serialized_fmi;
@@ -289,32 +264,11 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
   my_func_memo_info->memoized_vals = NULL;
 
 
-  PyObject* global_var_dependencies =
-    PyDict_GetItemString(serialized_fmi, "global_var_dependencies");
-  if (global_var_dependencies) {
-    Py_INCREF(global_var_dependencies);
-    my_func_memo_info->global_var_dependencies = global_var_dependencies;
-  }
-
   PyObject* code_dependencies =
     PyDict_GetItemString(serialized_fmi, "code_dependencies");
   if (code_dependencies) {
     Py_INCREF(code_dependencies);
     my_func_memo_info->code_dependencies = code_dependencies;
-  }
-
-  PyObject* file_read_dependencies =
-    PyDict_GetItemString(serialized_fmi, "file_read_dependencies");
-  if (file_read_dependencies) {
-    Py_INCREF(file_read_dependencies);
-    my_func_memo_info->file_read_dependencies = file_read_dependencies;
-  }
-
-  PyObject* file_write_dependencies =
-    PyDict_GetItemString(serialized_fmi, "file_write_dependencies");
-  if (file_write_dependencies) {
-    Py_INCREF(file_write_dependencies);
-    my_func_memo_info->file_write_dependencies = file_write_dependencies;
   }
 
   return my_func_memo_info;

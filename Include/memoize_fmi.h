@@ -26,12 +26,19 @@ typedef struct {
   // (we can't make this into a dict since not all argument values are
   // hashable as keys ... instead, we will make this a list of
   // dicts, where the keys are:
+  //
   //   "args" --> argument list
+  //   "global_vars_read" --> dict mapping global vars to values (OPTIONAL)
+  //
+  //   "files_read" --> dict mapping files read to modtimes (OPTIONAL)
+  //   "files_written" --> dict mapping files written to modtimes (OPTIONAL)
+  //
   //   "retval" --> return value, stored in a SINGLETON list
   //                (to facilitate mutation for COW optimization)
+  //   "stdout_buf" --> buffered stdout string (OPTIONAL)
+  //   "stderr_buf" --> buffered stderr string (OPTIONAL)
+  //
   //   "runtime_ms" --> how many milliseconds it took to run
-  //   "stdout_buf" --> buffered stdout string (OPTIONAL!)
-  //   "stderr_buf" --> buffered stderr string (OPTIONAL!)
   //
   // to support lazy-loading, this field is serialized to disk as:
   //   incpy-cache/XXX.memoized_vals.pickle
@@ -43,9 +50,6 @@ typedef struct {
   // all of these fields are serialized to disk as:
   //   incpy-cache/XXX.dependencies.pickle
   PyObject* code_dependencies;        // Dict
-  PyObject* global_var_dependencies;  // Dict
-  PyObject* file_read_dependencies;   // Dict
-  PyObject* file_write_dependencies;  // Dict
 
 
   // these fields are NOT serialized to disk

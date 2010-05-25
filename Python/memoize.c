@@ -1344,16 +1344,7 @@ void pg_finalize() {
    returns 1 if dependencies satisfied, 0 if they're not
   
    my_func_memo_info is the function for which you want to check
-   dependencies
-  
-   cur_frame is the current PyFrameObject to use for looking up global
-   variables (it is passed VERBATIM into recursive calls)
-  
-   check all dependencies of current function, then recurse inside of
-   all its called functions (code dependencies) and check their
-   dependencies as well ... and keep recursing until we get to leaf
-   functions with no callees.
-*/
+   dependencies */
 static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
                                       PyFrameObject* cur_frame) {
   // this will be used to prevent infinite loops when there are circular
@@ -1553,40 +1544,7 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
     }
   }
 
-
-  // start with a success value and then turn to failure if any of the
-  // below recursive calls fail ...
-  int all_child_dependencies_satisfied = 1;
-
-  // ok, now we've gotta recurse inside of all your code dependencies
-  // and check whether they're all met as well:
-
-  PyObject* called_func_name = NULL;
-  PyObject* unused_junk = NULL;
-  pos = 0; // reset it!
-  while (PyDict_Next(my_func_memo_info->code_dependencies,
-                     &pos, &called_func_name, &unused_junk)) {
-    PyObject* called_func_cod = PyDict_GetItem(func_name_to_code_object, called_func_name);
-    assert(PyCode_Check(called_func_cod));
-    FuncMemoInfo* called_func_memo_info =
-      get_func_memo_info_from_cod((PyCodeObject*)called_func_cod);
-
-    assert(called_func_memo_info);
-
-    // don't recurse on a function that we've already checked, or else
-    // you will infinite loop:
-    if (my_func_memo_info->last_dep_check_func_call_time ==
-        called_func_memo_info->last_dep_check_func_call_time) {
-      continue;
-    }
-
-    if (!are_dependencies_satisfied(called_func_memo_info, cur_frame)) {
-      all_child_dependencies_satisfied = 0;
-      break;
-    }
-  }
-
-  return all_child_dependencies_satisfied;
+  return 1;
 }
 
 
@@ -1631,13 +1589,14 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   f->func_memo_info = get_func_memo_info_from_cod(co);
 
-  // update your caller with a code dependency on you
-  if (f->f_back) {
-    FuncMemoInfo* caller_func_memo_info = f->f_back->func_memo_info;
-
-    // caller_func_memo_info doesn't exist for top-level modules:
-    if (caller_func_memo_info) {
-      PyObject* caller_code_deps = caller_func_memo_info->code_dependencies;
+  // update ALL callers with a code dependency on you
+  // (TODO: can optimize later by only updating your immediate caller and
+  //  then 'bubbling up' changes when it terminates)
+  PyFrameObject* cur_frame = f->f_back;
+  PyObject* my_self_code_dependency = NULL;
+  while (cur_frame) {
+    if (cur_frame->func_memo_info) {
+      PyObject* caller_code_deps = cur_frame->func_memo_info->code_dependencies;
       assert(caller_code_deps);
 
       // Optimizaton: avoid adding duplicates (there will be MANY duplicates
@@ -1646,13 +1605,17 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         // add a code dependency in your caller to the most up-to-date
         // code for THIS function (not a previously-saved version of the
         // code, since later we might discover it to be outdated!)
-        PyObject* my_self_code_dependency =
-          PyDict_GetItem(func_name_to_code_dependency, co->pg_canonical_name);
-        assert(my_self_code_dependency);
+
+        // lazy-initialize
+        if (!my_self_code_dependency) {
+          my_self_code_dependency = PyDict_GetItem(func_name_to_code_dependency, co->pg_canonical_name);
+          assert(my_self_code_dependency);
+        }
 
         PyDict_SetItem(caller_code_deps, co->pg_canonical_name, my_self_code_dependency);
       }
     }
+    cur_frame = cur_frame->f_back;
   }
 
 
@@ -2866,25 +2829,7 @@ void pg_FILE_READ_event(PyFileObject* fobj) {
 // adds a file read dependency to the top-most NON-IGNORED frame
 // (PRIVATE version, don't call from outside code)
 static void private_FILE_READ_event(PyFileObject* fobj) {
-  /* subtle ... if we are ignoring some functions, then we will miss
-     file read dependencies that those ignored functions create; one
-     hack is to simply find the first non-ignored function and add a
-     file read dependency there */
-  PyFrameObject* top_non_ignored_frame = PyEval_GetFrame();
-  while (top_non_ignored_frame &&
-         top_non_ignored_frame->f_code->pg_ignore) {
-    top_non_ignored_frame = top_non_ignored_frame->f_back;
-  }
-
-  if (!top_non_ignored_frame) {
-    return;
-  }
-
-  if (!top_non_ignored_frame->func_memo_info) {
-    return;
-  }
-
-  assert(fobj && fobj->f_fp);
+  assert(fobj);
 
   // we are impure if we read from stdin ...
   if (strcmp(PyString_AsString(fobj->f_name), "<stdin>") == 0) {
@@ -2892,35 +2837,13 @@ static void private_FILE_READ_event(PyFileObject* fobj) {
     return;
   }
 
-  // lazy initialize
-  if (!top_non_ignored_frame->func_memo_info->file_read_dependencies) {
-    top_non_ignored_frame->func_memo_info->file_read_dependencies = PyDict_New();
+  PyFrameObject* f = PyEval_GetFrame();
+  while (f) {
+    if (f->func_memo_info) {
+      LAZY_INIT_SET_ADD(f->files_read_set, fobj->f_name);
+    }
+    f = f->f_back;
   }
-
-  PyObject* file_read_dependencies_dict = 
-    top_non_ignored_frame->func_memo_info->file_read_dependencies;
-
-  // if the dependency is already in there, don't bother adding it again
-  // (we don't have to worry about the file mutating, since if it
-  // mutates, then file_read_dependencies will have been cleared by a call
-  // to mark_impure() or to clear_cache_and_mark_pure())
-  if (PyDict_Contains(file_read_dependencies_dict, fobj->f_name)) {
-    return;
-  }
-
-
-  PG_LOG_PRINTF("dict(event='FILE_READ', what='%s')\n",
-                PyString_AsString(fobj->f_name));
-
-  time_t mtime = PyOS_GetLastModificationTime(PyString_AsString(fobj->f_name),
-                                              fobj->f_fp);
-  assert (mtime >= 0); // -1 is an error value
-  PyObject* mtime_obj = PyLong_FromLong((long)mtime);
-
-  // Add a dependency on THIS FILE for top frame
-  // Key: filename, Value: UNIX last modified timestamp
-  PyDict_SetItem(file_read_dependencies_dict, fobj->f_name, mtime_obj);
-  Py_DECREF(mtime_obj);
 }
 
 
