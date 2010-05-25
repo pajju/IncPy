@@ -762,7 +762,7 @@ void add_new_code_dep(PyCodeObject* cod) {
        If this becomes a performance bottleneck, then OPTIMIZE IT! */
     PyObject* canonical_name = NULL;
     PyObject* fmi_addr = NULL;
-    Py_ssize_t pos = 0; // reset it!
+    Py_ssize_t pos = 0;
     while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
       FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyLong_AsLong(fmi_addr);
       func_memo_info->all_code_deps_SAT = 0;
@@ -1198,7 +1198,7 @@ void pg_finalize() {
   // serialize and pickle func_memo_info entries to disk
   PyObject* canonical_name = NULL;
   PyObject* fmi_addr = NULL;
-  Py_ssize_t pos = 0; // reset it!
+  Py_ssize_t pos = 0;
   while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
     FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyLong_AsLong(fmi_addr);
 
@@ -1337,35 +1337,16 @@ void pg_finalize() {
 }
 
 
-/*
-   checks code, global variable, and file (read/write) dependencies
-   for the current function
-  
-   returns 1 if dependencies satisfied, 0 if they're not
-  
-   my_func_memo_info is the function for which you want to check
-   dependencies */
-static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
-                                      PyFrameObject* cur_frame) {
-  // this will be used to prevent infinite loops when there are circular
-  // dependencies (see IncPy-regression-tests/circular_code_dependency/)
-  my_func_memo_info->last_dep_check_func_call_time = num_executed_func_calls;
-
-  Py_ssize_t pos; // must reset on every iterator call, or else does the wrong thing
-
-  // the function for which we're checking dependencies (note that it
-  // could DIFFER from my_func_memo_info since this function can be
-  // called recursively):
-  char* cur_func_name_str = PyString_AsString(GET_CANONICAL_NAME(cur_frame->func_memo_info));
-
-  // Code dependencies:
-
+/* checks code dependencies for the current function
+   returns 1 if dependencies satisfied, 0 if they're not */
+static int are_code_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
+                                           PyFrameObject* cur_frame) {
   // you must at least have a code dependency on YOURSELF
   assert(my_func_memo_info->code_dependencies);
 
   // Optimization: assuming that code doesn't change in the middle of
   // execution (which is a pretty safe assumption), we only need to do
-  // this check ONCE at the beginning of execution and not on each call 
+  // this check ONCE at the beginning of execution and not on each call
   //
   // Caveat: if code is re-loaded in the middle of execution, it CAN
   // actually change, so all_code_deps_SAT must be set to 0 in those
@@ -1373,7 +1354,7 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
   if (!my_func_memo_info->all_code_deps_SAT) {
     PyObject* dependent_func_canonical_name = NULL;
     PyObject* memoized_code_dependency = NULL;
-    pos = 0; // reset it!
+    Py_ssize_t pos = 0;
     while (PyDict_Next(my_func_memo_info->code_dependencies,
                        &pos, &dependent_func_canonical_name, &memoized_code_dependency)) {
       PyObject* cur_code_dependency =
@@ -1386,14 +1367,16 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
         PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_NOT_FOUND', what='%s')\n",
                       dependent_func_name_str);
         USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s not found\n",
-                        cur_func_name_str, dependent_func_name_str);
+                        PyString_AsString(GET_CANONICAL_NAME(my_func_memo_info)),
+                        dependent_func_name_str);
         return 0;
       }
       else if (!code_dependency_EQ(cur_code_dependency, memoized_code_dependency)) {
         PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_CHANGED', what='%s')\n",
                       dependent_func_name_str);
         USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s changed\n",
-                        cur_func_name_str, dependent_func_name_str);
+                        PyString_AsString(GET_CANONICAL_NAME(my_func_memo_info)),
+                        dependent_func_name_str);
         return 0;
       }
     }
@@ -1402,146 +1385,6 @@ static int are_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
     // then this function's code dependencies are satisfied for this
     // particular script execution, so we don't have to check it again:
     my_func_memo_info->all_code_deps_SAT = 1;
-  }
-
-
-  // Global variable dependencies:
-  if (my_func_memo_info->global_var_dependencies) {
-    PyObject* global_varname_tuple = NULL;
-    PyObject* memoized_value = NULL;
-
-    pos = 0; // reset it!
-    while (PyDict_Next(my_func_memo_info->global_var_dependencies,
-                       &pos, &global_varname_tuple, &memoized_value)) {
-      PyObject* cur_value = find_globally_reachable_obj_by_name(global_varname_tuple, cur_frame);
-      if (!cur_value) {
-        // we can't even find the global object, then PUNT!
-        PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
-        char* varname_str = PyString_AsString(tmp_str);
-        PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_NOT_FOUND', varname=\"%s\")\n",
-                      varname_str);
-        USER_LOG_PRINTF("GLOBAL_VAR_DEPENDENCY_BROKEN %s | %s not found\n",
-                        cur_func_name_str, varname_str);
-        Py_DECREF(tmp_str);
-        return 0;
-      }
-      else {
-        // obj_equals can take a long time to run ...
-        // especially when your function has a large global variable dependency
-        if (!obj_equals(memoized_value, cur_value)) {
-          PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
-          char* varname_str = PyString_AsString(tmp_str);
-          PG_LOG_PRINTF("dict(event='GLOBAL_VAR_DEPENDENCY_BROKEN', why='VALUE_CHANGED', varname=\"%s\")\n",
-                        varname_str);
-          USER_LOG_PRINTF("GLOBAL_VAR_DEPENDENCY_BROKEN %s | %s changed\n",
-                          cur_func_name_str, varname_str);
-          Py_DECREF(tmp_str);
-
-          return 0;
-        }
-        else {
-#ifdef ENABLE_COW
-          /* Optimization: If memoized_value and cur_value point to
-             different objects whose values are EQUAL, then simply replace
-             &memoized_value (the appropriate element within
-             my_func_memo_info.global_var_dependencies) with cur_value
-             (the ACTUAL global variable value) so that future comparisons
-             will be lightning-fast (since their pointers are now equal).  
-          
-             The one caveat is that this must be a COW copy, since it's
-             possible for someone to mutate cur_value and have its value
-             actually NOT be equal to memoized_value any longer.  In that
-             case, we should set &memoized_value (the appropriate element
-             within my_func_memo_info.global_var_dependencies) back to
-             its original value. */
-
-          // Remember, do this only their values are equal but their
-          // addresses are NOT EQUAL ...
-          if (memoized_value != cur_value) {
-            PyDict_SetItem(my_func_memo_info->global_var_dependencies,
-                           global_varname_tuple,
-                           cur_value);
-
-            // make it a COW copy ...
-            cow_containment_dict_ADD(cur_value);
-          }
-#endif // ENABLE_COW
-        }
-      }
-    }
-  }
-
-
-  // File read dependencies:
-  if (my_func_memo_info->file_read_dependencies) {
-    PyObject* dependent_filename = NULL;
-    PyObject* saved_modtime_obj = NULL;
-    pos = 0; // reset it!
-    while (PyDict_Next(my_func_memo_info->file_read_dependencies,
-                       &pos, &dependent_filename, &saved_modtime_obj)) {
-      char* dependent_filename_str = PyString_AsString(dependent_filename);
-
-      PyFileObject* fobj = (PyFileObject*)PyFile_FromString(dependent_filename_str, "r");
-
-      if (fobj) {
-        long mtime = (long)PyOS_GetLastModificationTime(PyString_AsString(fobj->f_name),
-                                                        fobj->f_fp);
-        Py_DECREF(fobj);
-        long saved_modtime = PyInt_AsLong(saved_modtime_obj);
-        if (mtime != saved_modtime) {
-          PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
-                        dependent_filename_str);
-          USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s changed\n",
-                          cur_func_name_str, dependent_filename_str);
-          return 0;
-        }
-      }
-      else {
-        assert(PyErr_Occurred());
-        PyErr_Clear();
-        PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
-                      dependent_filename_str);
-        USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s not found\n",
-                        cur_func_name_str, dependent_filename_str);
-        return 0;
-      }
-    }
-  }
-
-  // File write dependencies:
-  if (my_func_memo_info->file_write_dependencies) {
-    PyObject* dependent_filename = NULL;
-    PyObject* saved_modtime_obj = NULL;
-    pos = 0; // reset it!
-    while (PyDict_Next(my_func_memo_info->file_write_dependencies,
-                       &pos, &dependent_filename, &saved_modtime_obj)) {
-      char* dependent_filename_str = PyString_AsString(dependent_filename);
-
-      PyFileObject* fobj = (PyFileObject*)PyFile_FromString(dependent_filename_str, "r");
-
-      if (fobj) {
-        long mtime = (long)PyOS_GetLastModificationTime(PyString_AsString(fobj->f_name),
-                                                        fobj->f_fp);
-        Py_DECREF(fobj);
-        long saved_modtime = PyInt_AsLong(saved_modtime_obj);
-        if (mtime != saved_modtime) {
-          PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
-                        dependent_filename_str);
-          USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s changed\n",
-                          cur_func_name_str, dependent_filename_str);
-          return 0;
-        }
-      }
-      else {
-        assert(PyErr_Occurred());
-        PyErr_Clear();
-        PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
-                      dependent_filename_str);
-        USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s not found\n",
-                        cur_func_name_str, dependent_filename_str);
-        return 0;
-      }
-    }
   }
 
   return 1;
@@ -1626,7 +1469,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
 
   // check that all dependencies are satisfied ...
-  if (!are_dependencies_satisfied(f->func_memo_info, f)) {
+  if (!are_code_dependencies_satisfied(f->func_memo_info, f)) {
     clear_cache_and_mark_pure(f->func_memo_info);
     USER_LOG_PRINTF("CLEAR_CACHE %s\n", PyString_AsString(co->pg_canonical_name));
     goto pg_enter_frame_done;
@@ -1636,9 +1479,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   // by now, all the dependencies are still satisfied ...
 
   PyObject* memoized_vals_lst = get_memoized_vals_lst(f->func_memo_info);
-
-  // try to find whether the function has been called before with
-  // these arguments:
 
   /* TODO: this is REALLY EXPENSIVE if memoized_vals_lst and/or
      its constituent elements are LARGE, since we're just doing a 
@@ -1652,14 +1492,19 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   long memoized_runtime_ms = -1;
 
   if (memoized_vals_lst) {
-    Py_ssize_t i;
-    for (i = 0; i < PyList_Size(memoized_vals_lst); i++) {
-      PyObject* elt = PyList_GET_ITEM(memoized_vals_lst, i);
+    Py_ssize_t memoized_vals_idx;
+    for (memoized_vals_idx = 0;
+         memoized_vals_idx < PyList_Size(memoized_vals_lst);
+         memoized_vals_idx++) {
+      PyObject* elt = PyList_GET_ITEM(memoized_vals_lst, memoized_vals_idx);
       assert(PyDict_CheckExact(elt));
+
+      // try to find whether the function has been called before with
+      // this combination of arguments and global variable values:
+      int all_args_and_global_vals_equal = 1;
+
       PyObject* memoized_arg_lst = PyDict_GetItemString(elt, "args");
       assert(memoized_arg_lst);
-
-      int all_args_equal = 1;
 
       // let's iterate through the lists element-by-element
       // so that we can apply the hash consing COW optimization if
@@ -1687,7 +1532,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
         // obj_equals is potentially expensive to compute ...
         if (!obj_equals(memoized_elt, actual_elt)) {
-          all_args_equal = 0;
+          all_args_and_global_vals_equal = 0;
           Py_DECREF(actual_elt); // tricky tricky!
           break;
         }
@@ -1728,29 +1573,161 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         Py_DECREF(actual_elt); // tricky tricky!
       }
 
-
-      if (all_args_equal) {
-        // remember that retval is actually a singleton list ...
-        PyObject* memoized_retval_lst = PyDict_GetItemString(elt, "retval");
-        assert(memoized_retval_lst && 
-               PyList_CheckExact(memoized_retval_lst) && 
-               PyList_Size(memoized_retval_lst) == 1);
-
-        memoized_retval = PyList_GET_ITEM(memoized_retval_lst, 0);
-
-        // VERY important to increment its refcount, since
-        // memoized_vals_lst (its enclosing parent) will be
-        // blown away soon!!!
-        Py_XINCREF(memoized_retval);
-
-        memoized_runtime_ms = PyLong_AsLong(PyDict_GetItemString(elt, "runtime_ms"));
-
-        // these can be null since they are optional fields in the dict
-        memoized_stdout_buf = PyDict_GetItemString(elt, "stdout_buf");
-        memoized_stderr_buf = PyDict_GetItemString(elt, "stderr_buf");
-
-        break; // break out of this loop, we've found a match!
+      if (!all_args_and_global_vals_equal) {
+        continue; // ... onto next element of memoized_vals_lst
       }
+
+      // we've matched up the args, now see if global vars match ...
+      PyObject* global_vars_read = PyDict_GetItemString(elt, "global_vars_read");
+      if (global_vars_read) {
+        PyObject* global_varname_tuple = NULL;
+        PyObject* memoized_value = NULL;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(global_vars_read,
+                           &pos, &global_varname_tuple, &memoized_value)) {
+          PyObject* cur_value =
+            find_globally_reachable_obj_by_name(global_varname_tuple, f);
+
+          if (!cur_value) {
+            // we can't even find the global object, then PUNT!
+#ifdef ENABLE_DEBUG_LOGGING
+            PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
+            char* varname_str = PyString_AsString(tmp_str);
+            PG_LOG_PRINTF("dict(warning='GLOBAL VAR NOT FOUND, varname=\"%s\")\n",
+                          varname_str);
+            Py_DECREF(tmp_str);
+#endif // ENABLE_DEBUG_LOGGING
+
+            all_args_and_global_vals_equal = 0;
+            break;
+          }
+          else if (!obj_equals(memoized_value, cur_value)) {
+            all_args_and_global_vals_equal = 0;
+            break;
+          }
+        }
+      }
+
+      if (!all_args_and_global_vals_equal) {
+        continue; // ... onto next element of memoized_vals_lst
+      }
+
+
+      // now that we've found a match, check to make sure files_read and
+      // files_written haven't yet been modified.  if any of these files
+      // have been modified, then we must CLEAR ONLY THIS ENTRY in
+      // memoized_vals and break out of the loop
+      char dependencies_satisfied = 1;
+
+      PyObject* files_read = PyDict_GetItemString(elt, "files_read");
+      if (files_read) {
+        PyObject* dependent_filename = NULL;
+        PyObject* saved_modtime_obj = NULL;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(files_read,
+                           &pos, &dependent_filename, &saved_modtime_obj)) {
+          char* dependent_filename_str = PyString_AsString(dependent_filename);
+          PyFileObject* fobj = (PyFileObject*)PyFile_FromString(dependent_filename_str, "r");
+
+          if (fobj) {
+            long mtime = (long)PyOS_GetLastModificationTime(PyString_AsString(fobj->f_name),
+                                                            fobj->f_fp);
+            Py_DECREF(fobj);
+            long saved_modtime = PyInt_AsLong(saved_modtime_obj);
+            if (mtime != saved_modtime) {
+              PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
+                            dependent_filename_str);
+              USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s changed\n",
+                              PyString_AsString(co->pg_canonical_name),
+                              dependent_filename_str);
+              dependencies_satisfied = 0;
+              break;
+            }
+          }
+          else {
+            assert(PyErr_Occurred());
+            PyErr_Clear();
+            PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
+                          dependent_filename_str);
+            USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s not found\n",
+                            PyString_AsString(co->pg_canonical_name),
+                            dependent_filename_str);
+            dependencies_satisfied = 0;
+            break;
+          }
+        }
+      }
+
+      PyObject* files_written = PyDict_GetItemString(elt, "files_written");
+      if (files_written) {
+        PyObject* dependent_filename = NULL;
+        PyObject* saved_modtime_obj = NULL;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(files_written,
+                           &pos, &dependent_filename, &saved_modtime_obj)) {
+          char* dependent_filename_str = PyString_AsString(dependent_filename);
+
+          PyFileObject* fobj = (PyFileObject*)PyFile_FromString(dependent_filename_str, "r");
+
+          if (fobj) {
+            long mtime = (long)PyOS_GetLastModificationTime(PyString_AsString(fobj->f_name),
+                                                            fobj->f_fp);
+            Py_DECREF(fobj);
+            long saved_modtime = PyInt_AsLong(saved_modtime_obj);
+            if (mtime != saved_modtime) {
+              PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
+                            dependent_filename_str);
+              USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s changed\n",
+                              PyString_AsString(co->pg_canonical_name),
+                              dependent_filename_str);
+              dependencies_satisfied = 0;
+              break;
+            }
+          }
+          else {
+            assert(PyErr_Occurred());
+            PyErr_Clear();
+            PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
+                          dependent_filename_str);
+            USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s not found\n",
+                            PyString_AsString(co->pg_canonical_name),
+                            dependent_filename_str);
+            dependencies_satisfied = 0;
+            break;
+          }
+        }
+      }
+
+      if (!dependencies_satisfied) {
+        // KILL THIS ENTRY!!!
+        PyObject* tmp_idx = PyLong_FromLong((long)memoized_vals_idx);
+        PyObject_DelItem(memoized_vals_lst, tmp_idx);
+        Py_DECREF(tmp_idx);
+
+        break; // get the heck out of this loop!!!
+      }
+
+
+      // remember that retval is actually a singleton list ...
+      PyObject* memoized_retval_lst = PyDict_GetItemString(elt, "retval");
+      assert(memoized_retval_lst &&
+             PyList_CheckExact(memoized_retval_lst) &&
+             PyList_Size(memoized_retval_lst) == 1);
+
+      memoized_retval = PyList_GET_ITEM(memoized_retval_lst, 0);
+
+      // VERY important to increment its refcount, since
+      // memoized_vals_lst (its enclosing parent) will be
+      // blown away soon!!!
+      Py_XINCREF(memoized_retval);
+
+      memoized_runtime_ms = PyLong_AsLong(PyDict_GetItemString(elt, "runtime_ms"));
+
+      // these can be null since they are optional fields in the dict
+      memoized_stdout_buf = PyDict_GetItemString(elt, "stdout_buf");
+      memoized_stderr_buf = PyDict_GetItemString(elt, "stderr_buf");
+
+      break; // break out of this loop, we've found the first (should be ONLY) match!
     }
   }
 
@@ -2123,7 +2100,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   }
 
   if (f->globals_read_set) {
-    PyObject* globals_read = PyDict_New();
+    PyObject* global_vars_read = PyDict_New();
 
     Py_ssize_t s_pos = 0;
     PyObject* global_varname_tuple;
@@ -2131,7 +2108,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       PyObject* val = find_globally_reachable_obj_by_name(global_varname_tuple, f);
 
       if (val) {
-        deepcopy_global_and_add_to_dict(global_varname_tuple, val, globals_read);
+        deepcopy_global_and_add_to_dict(global_varname_tuple, val, global_vars_read);
       }
       else {
 #ifdef ENABLE_DEBUG_LOGGING
@@ -2142,8 +2119,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       }
     }
 
-    PyDict_SetItemString(memo_table_entry, "globals_read", globals_read);
-    Py_DECREF(globals_read);
+    PyDict_SetItemString(memo_table_entry, "global_vars_read", global_vars_read);
+    Py_DECREF(global_vars_read);
   }
 
   if (f->files_read_set) {

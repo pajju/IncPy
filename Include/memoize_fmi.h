@@ -58,13 +58,6 @@ typedef struct {
                     // canonical name as pg_canonical_name
                     // (see GET_CANONICAL_NAME macro below)
 
-  // specifies the last time that this FuncMemoInfo was checked for
-  // dependencies by are_dependencies_satisfied(), used to prevent
-  // infinite loops
-  //
-  // has the same units as 'num_executed_func_calls'
-  unsigned int last_dep_check_func_call_time;
-
   // booleans
   char is_impure;    // is this function impure during THIS execution?
   char all_code_deps_SAT; // are all code dependencies satisfied during THIS execution?
