@@ -40,19 +40,9 @@ typedef struct {
   //   instead use get_memoized_vals_lst()
   PyObject* memoized_vals;            // List
 
-  // all of these fields are serialized to disk as:
-  //   incpy-cache/XXX.dependencies.pickle
-  PyObject* global_var_dependencies;  // Dict
-  PyObject* file_read_dependencies;   // Dict
-  PyObject* file_write_dependencies;  // Dict
-
   // code dependency 'object' (Dict) representing the saved state of
   // this function's code
   PyObject* self_code_dependency;
-
-  // Set of canonical names of functions that this function DIRECTLY called
-  // (used for computing transitive dependencies)
-  PyObject* called_funcs_set;
 
 
   // these fields are NOT serialized to disk

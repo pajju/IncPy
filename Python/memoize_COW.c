@@ -210,7 +210,7 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
 
       - memoized args
       - memoized retval
-      - global_var_dependencies
+      - memoized global_var_dependencies
 
     and REPLACE them with references to copy
 
@@ -230,52 +230,50 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
     long fmi_addr_long = PyLong_AsLong(fmi_addr);
     FuncMemoInfo* func_memo_info = (FuncMemoInfo*)fmi_addr_long;
 
-    // first check global_var_dependencies
-    PyObject* global_var_deps = func_memo_info->global_var_dependencies;
-
-    if (global_var_deps) {
-      PyObject* varname = NULL;
-      PyObject* val = NULL;
-      Py_ssize_t pos = 0;
-      while (PyDict_Next(global_var_deps, &pos, &varname, &val)) {
-        // replace reference to objPtr with a reference to copy
-        if (val == objPtr) {
-          // i think it's okay to do a PyDict_SetItem while iterating
-          // through it ... but double-check later to make sure (TODO)
-          PyDict_SetItem(global_var_deps, varname, copy);
-        }
-      }
-    }
-
-
-    // then check memoized_vals for memoized args and retval:
     PyObject* memoized_vals_lst = func_memo_info->memoized_vals;
 
-    if (memoized_vals_lst) {
-      Py_ssize_t i;
-      for (i = 0; i < PyList_Size(memoized_vals_lst); i++) {
-        PyObject* elt = PyList_GET_ITEM(memoized_vals_lst, i);
-        assert(PyDict_CheckExact(elt));
+    if (!memoized_vals_lst) {
+      continue;
+    }
 
-        PyObject* args_lst = PyDict_GetItemString(elt, "args");
-        PyObject* retval_lst = PyDict_GetItemString(elt, "retval");
+    Py_ssize_t i;
+    for (i = 0; i < PyList_Size(memoized_vals_lst); i++) {
+      PyObject* elt = PyList_GET_ITEM(memoized_vals_lst, i);
+      assert(PyDict_CheckExact(elt));
 
-        assert(PyList_Check(args_lst));
-        Py_ssize_t j;
-        for (j = 0; j < PyList_Size(args_lst); j++) {
-          PyObject* val = PyList_GET_ITEM(args_lst, j);
-          if (val == objPtr) {
-            Py_INCREF(copy); // ugh stupid refcounts - PyList_SetItem doesn't inc for us
-            PyList_SetItem(args_lst, j, copy);
-          }
-        }
+      PyObject* args_lst = PyDict_GetItemString(elt, "args");
+      PyObject* retval_lst = PyDict_GetItemString(elt, "retval");
+      PyObject* global_var_deps = PyDict_GetItemString(elt, "global_var_dependencies");
 
-        assert(PyList_Check(retval_lst));
-        assert(PyList_Size(retval_lst) == 1);
-
-        if (PyList_GET_ITEM(retval_lst, 0) == objPtr) {
+      assert(PyList_Check(args_lst));
+      Py_ssize_t j;
+      for (j = 0; j < PyList_Size(args_lst); j++) {
+        PyObject* val = PyList_GET_ITEM(args_lst, j);
+        if (val == objPtr) {
           Py_INCREF(copy); // ugh stupid refcounts - PyList_SetItem doesn't inc for us
-          PyList_SetItem(retval_lst, 0, copy);
+          PyList_SetItem(args_lst, j, copy);
+        }
+      }
+
+      assert(PyList_Check(retval_lst));
+      assert(PyList_Size(retval_lst) == 1);
+
+      if (PyList_GET_ITEM(retval_lst, 0) == objPtr) {
+        Py_INCREF(copy); // ugh stupid refcounts - PyList_SetItem doesn't inc for us
+        PyList_SetItem(retval_lst, 0, copy);
+      }
+
+      if (global_var_deps) {
+        PyObject* varname = NULL;
+        PyObject* val = NULL;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(global_var_deps, &pos, &varname, &val)) {
+          // replace reference to objPtr with a reference to copy
+          if (val == objPtr) {
+            // i think it's okay to do a PyDict_SetItem while iterating
+            // through it ... but double-check later to make sure (TODO)
+            PyDict_SetItem(global_var_deps, varname, copy);
+          }
         }
       }
     }

@@ -87,9 +87,17 @@ typedef struct _frame {
     PyObject* files_written_set;
     PyObject* files_closed_set;
 
-    // sets keeping track of global variables READ by this invocation of f
+    // set keeping track of files READ by this invocation of f
+    // (Optimization: remain NULL when empty)
+    PyObject* files_read_set;
+
+    // set keeping track of global variables READ by this invocation of f
     // (Optimization: remain NULL when empty)
     PyObject* globals_read_set;
+
+    // set keeping track of functions called by this one
+    // (Optimization: remain NULL when empty)
+    PyObject* funcs_called_set;
 
     // points to the func_memo_info entry for this frame
     // (is NULL for frames representing top-level modules,
