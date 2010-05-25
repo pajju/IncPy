@@ -94,6 +94,8 @@ typedef struct _frame {
     // points to the func_memo_info entry for this frame
     // (is NULL for frames representing top-level modules,
     //  or code that we either can't or don't want to track)
+    //
+    // this is a WEAK REFERENCE, so do NOT Py_DECREF it ...
     FuncMemoInfo* func_memo_info;
 
     // list of argument values (aliases, not copies) captured

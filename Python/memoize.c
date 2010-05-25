@@ -138,6 +138,15 @@ static FILE* user_log_file = NULL;
     } \
   } while (0)
 
+// lazily initialize set s and add elt to it
+#define LAZY_INIT_SET_ADD(s, elt) \
+  do { \
+    if (!(s)) { \
+      (s) = PySet_New(NULL); \
+    } \
+    PySet_Add((s), (elt)); \
+  } while (0)
+
 
 // References to Python standard library functions:
 
@@ -1633,12 +1642,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
     // caller_func_memo_info doesn't exist for top-level modules:
     if (caller_func_memo_info) {
-      // lazy-initialize
-      if (!caller_func_memo_info->called_funcs_set) {
-        caller_func_memo_info->called_funcs_set = PySet_New(NULL);
-      }
-
-      PySet_Add(caller_func_memo_info->called_funcs_set, co->pg_canonical_name);
+      LAZY_INIT_SET_ADD(caller_func_memo_info->called_funcs_set, co->pg_canonical_name);
     }
   }
 
@@ -1928,7 +1932,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
                 PyString_AsString(canonical_name),
                 runtime_ms);
 
-  // could be null if it's a top-level module ...
+  // could be null if it's code we're trying to ignore
   my_func_memo_info = f->func_memo_info;
 
   // don't do anything tracing for code without a func_memo_info
@@ -2406,11 +2410,7 @@ static void add_global_read_to_top_frame(PyObject* global_container) {
       return;
     }
 
-    // lazy initialize set
-    if (!top_frame->globals_read_set) {
-      top_frame->globals_read_set = PySet_New(NULL);
-    }
-    PySet_Add(top_frame->globals_read_set, global_container);
+    LAZY_INIT_SET_ADD(top_frame->globals_read_set, global_container);
   }
 }
 
@@ -2798,18 +2798,8 @@ void pg_FILE_OPEN_event(PyFileObject* fobj) {
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
       if (f->func_memo_info) {
-
-        // lazy initialize set
-        if (!f->files_opened_w_set) {
-          f->files_opened_w_set = PySet_New(NULL);
-        }
-        PySet_Add(f->files_opened_w_set, fobj->f_name);
-
-        // lazy initialize set
-        if (!f->files_written_set) {
-          f->files_written_set = PySet_New(NULL);
-        }
-        PySet_Add(f->files_written_set, fobj->f_name);
+        LAZY_INIT_SET_ADD(f->files_opened_w_set, fobj->f_name);
+        LAZY_INIT_SET_ADD(f->files_written_set, fobj->f_name);
 
       }
       f = f->f_back;
@@ -2837,11 +2827,7 @@ void pg_FILE_CLOSE_event(PyFileObject* fobj) {
   PyFrameObject* f = PyEval_GetFrame();
   while (f) {
     if (f->func_memo_info) {
-      // lazy initialize set
-      if (!f->files_closed_set) {
-        f->files_closed_set = PySet_New(NULL);
-      }
-      PySet_Add(f->files_closed_set, fobj->f_name);
+      LAZY_INIT_SET_ADD(f->files_closed_set, fobj->f_name);
     }
     f = f->f_back;
   }
@@ -3172,11 +3158,7 @@ static void private_FILE_WRITE_event(PyFileObject* fobj) {
   PyFrameObject* f = PyEval_GetFrame();
   while (f) {
     if (f->func_memo_info) {
-      // lazy initialize set
-      if (!f->files_written_set) {
-        f->files_written_set = PySet_New(NULL);
-      }
-      PySet_Add(f->files_written_set, fobj->f_name);
+      LAZY_INIT_SET_ADD(f->files_written_set, fobj->f_name);
     }
     f = f->f_back;
   }
