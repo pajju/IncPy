@@ -359,6 +359,7 @@ PyObject* get_global_container(PyObject* obj) {
     return NULL;
   }
 
+  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
   return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr].global_container_weakref;
 }
 
@@ -431,6 +432,7 @@ unsigned int get_creation_time(PyObject* obj) {
     return 0;
   }
 
+  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
   return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr].creation_time;
 }
 
