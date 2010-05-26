@@ -301,14 +301,135 @@ static void init_definitely_impure_funcs(void);
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
 
-// TODO: implement me!!!
+// ugh, unfortunately the straightforward implementation for 64-bit is
+// much more kludgy and probably slower than the 32-bit implementation
 
-#   error "IncPy compilation error: No support yet for 64-bit architecture"
+obj_metadata**** level_1_map = NULL;
+
+void set_global_container(PyObject* obj, PyObject* global_container) {
+  if (!level_1_map) {
+    return;
+  }
+
+  assert(global_container);
+
+  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
+  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
+  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
+  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
+
+  obj_metadata*** level_2_map = level_1_map[level_1_addr];
+  if (!level_2_map) {
+    level_2_map = level_1_map[level_1_addr] = PyMem_New(obj_metadata**, METADATA_MAP_SIZE);
+    memset(level_2_map, 0, sizeof(obj_metadata**) * METADATA_MAP_SIZE);
+  }
+
+  obj_metadata** level_3_map = level_2_map[level_2_addr];
+  if (!level_3_map) {
+    level_3_map = level_2_map[level_2_addr] = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
+    memset(level_3_map, 0, sizeof(obj_metadata*) * METADATA_MAP_SIZE);
+  }
+
+  obj_metadata* level_4_map = level_3_map[level_3_addr];
+  if (!level_4_map) {
+    level_4_map = level_3_map[level_3_addr] = PyMem_New(obj_metadata, METADATA_MAP_SIZE);
+    memset(level_4_map, 0, sizeof(obj_metadata) * METADATA_MAP_SIZE);
+  }
+
+  level_4_map[level_4_addr].global_container_weakref = global_container;
+}
+
+PyObject* get_global_container(PyObject* obj) {
+  if (!level_1_map) {
+    return NULL;
+  }
+
+  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr]) {
+    return NULL;
+  }
+
+  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
+  if(!level_1_map[level_1_addr][level_2_addr]) {
+    return NULL;
+  }
+
+  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
+    return NULL;
+  }
+
+  return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr].global_container_weakref;
+}
+
+void set_creation_time(PyObject* obj, unsigned int creation_time) {
+  if (!level_1_map) {
+    return;
+  }
+
+  // fast-path ... don't do anything when creation_time is 0!
+  if (creation_time == 0) {
+    return;
+  }
+
+  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
+  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
+  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
+  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
+
+  obj_metadata*** level_2_map = level_1_map[level_1_addr];
+  if (!level_2_map) {
+    level_2_map = level_1_map[level_1_addr] = PyMem_New(obj_metadata**, METADATA_MAP_SIZE);
+    memset(level_2_map, 0, sizeof(obj_metadata**) * METADATA_MAP_SIZE);
+  }
+
+  obj_metadata** level_3_map = level_2_map[level_2_addr];
+  if (!level_3_map) {
+    level_3_map = level_2_map[level_2_addr] = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
+    memset(level_3_map, 0, sizeof(obj_metadata*) * METADATA_MAP_SIZE);
+  }
+
+  obj_metadata* level_4_map = level_3_map[level_3_addr];
+  if (!level_4_map) {
+    level_4_map = level_3_map[level_3_addr] = PyMem_New(obj_metadata, METADATA_MAP_SIZE);
+    memset(level_4_map, 0, sizeof(obj_metadata) * METADATA_MAP_SIZE);
+  }
+
+  level_4_map[level_4_addr].creation_time = creation_time;
+
+  // sanity check - comment out for speed:
+  //assert(get_creation_time(obj) == creation_time);
+}
+
+// return 0 if not found (earliest possible creation time)
+unsigned int get_creation_time(PyObject* obj) {
+  if (!level_1_map) {
+    return 0;
+  }
+
+  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr]) {
+    return 0;
+  }
+
+  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
+  if(!level_1_map[level_1_addr][level_2_addr]) {
+    return 0;
+  }
+
+  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
+    return 0;
+  }
+
+  return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr].creation_time;
+}
+
 
 #else
 // 32-bit architecture
 
-obj_metadata_map** level_1_map = NULL;
+obj_metadata** level_1_map = NULL;
 
 void set_global_container(PyObject* obj, PyObject* global_container) {
   if (!level_1_map) {
@@ -321,12 +442,11 @@ void set_global_container(PyObject* obj, PyObject* global_container) {
   UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
 
   if (!level_1_map[msb16]) {
-    level_1_map[msb16] = PyMem_New(obj_metadata_map, 1);
-    memset(level_1_map[msb16], 0, sizeof(obj_metadata_map));
-    //printf("NEW MAP msb=%u, size=%u\n", msb16, sizeof(obj_metadata_map));
+    level_1_map[msb16] = PyMem_New(obj_metadata, METADATA_MAP_SIZE);
+    memset(level_1_map[msb16], 0, sizeof(obj_metadata) * METADATA_MAP_SIZE);
   }
 
-  level_1_map[msb16]->contents[lsb16].global_container_weakref = global_container;
+  level_1_map[msb16][lsb16].global_container_weakref = global_container;
 }
 
 PyObject* get_global_container(PyObject* obj) {
@@ -341,10 +461,9 @@ PyObject* get_global_container(PyObject* obj) {
     return NULL;
   }
   else {
-    return level_1_map[msb16]->contents[lsb16].global_container_weakref;
+    return level_1_map[msb16][lsb16].global_container_weakref;
   }
 }
-
 
 void set_creation_time(PyObject* obj, unsigned int creation_time) {
   if (!level_1_map) {
@@ -360,14 +479,11 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
   UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
 
   if (!level_1_map[msb16]) {
-    level_1_map[msb16] = PyMem_New(obj_metadata_map, 1);
-    memset(level_1_map[msb16], 0, sizeof(obj_metadata_map));
-    //printf("NEW MAP msb=%u, size=%u\n", msb16, sizeof(obj_metadata_map));
+    level_1_map[msb16] = PyMem_New(obj_metadata, METADATA_MAP_SIZE);
+    memset(level_1_map[msb16], 0, sizeof(obj_metadata) * METADATA_MAP_SIZE);
   }
 
-  level_1_map[msb16]->contents[lsb16].creation_time = creation_time;
-
-  //printf("set_creation_time %u\n", creation_time);
+  level_1_map[msb16][lsb16].creation_time = creation_time;
 
   // sanity check - comment out for speed:
   //assert(get_creation_time(obj) == creation_time);
@@ -386,7 +502,7 @@ unsigned int get_creation_time(PyObject* obj) {
     return 0;
   }
   else {
-    return level_1_map[msb16]->contents[lsb16].creation_time;
+    return level_1_map[msb16][lsb16].creation_time;
   }
 }
 
@@ -890,7 +1006,7 @@ void pg_initialize() {
     Py_Exit(1);
   }
 
-// initialize zero out maps:
+// initialize and zero out level 1 mappings:
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
   if (sizeof(void*) != 8) {
@@ -898,6 +1014,8 @@ void pg_initialize() {
     Py_Exit(1);
   }
 
+  level_1_map = PyMem_New(obj_metadata***, METADATA_MAP_SIZE);
+  memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
 #else
 // 32-bit architecture
   if (sizeof(void*) != 4) {
@@ -905,9 +1023,8 @@ void pg_initialize() {
     Py_Exit(1);
   }
 
-  level_1_map = PyMem_New(obj_metadata_map*, METADATA_MAP_SIZE);
+  level_1_map = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
   memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
-  //printf("sizeof(level_1_map): %lu\n", sizeof(*level_1_map) * METADATA_MAP_SIZE);
 #endif
 
 

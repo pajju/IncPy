@@ -144,29 +144,28 @@ typedef unsigned long long int  UInt64;
    fields to it, then we will need to re-compile those libraries,
    which is a big pain! */
 typedef struct {
-  struct {
-    unsigned int creation_time; // measured in number of elapsed function calls
-    /* WEAK REFERENCE - This should only be set for MUTABLE values
-       (see update_global_container_weakref() for more details on why)
+  unsigned int creation_time; // measured in number of elapsed function calls
+  /* WEAK REFERENCE - This should only be set for MUTABLE values
+     (see update_global_container_weakref() for more details on why)
 
-       since this is a weak reference, make sure that there's at least
-       ONE other reference to this object, so that it doesn't get
-       garbage collected */
-    PyObject* global_container_weakref;
-  } contents[METADATA_MAP_SIZE];
-} obj_metadata_map;
+     since this is a weak reference, make sure that there's at least
+     ONE other reference to this object, so that it doesn't get
+     garbage collected */
+  PyObject* global_container_weakref;
+} obj_metadata;
 
 // allocate and zero out in pg_initialize():
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
 
-// TODO: implement me!!!
+// lazy-initialize each to an array of METADATA_MAP_SIZE
+obj_metadata**** level_1_map;
 
 #else
 // 32-bit architecture
 
-// initialize to an array of METADATA_MAP_SIZE:
-obj_metadata_map** level_1_map;
+// lazy-initialize to an array of METADATA_MAP_SIZE:
+obj_metadata** level_1_map;
 #endif
 
 void set_global_container(PyObject* obj, PyObject* global_container);
