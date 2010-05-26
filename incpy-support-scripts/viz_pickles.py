@@ -26,7 +26,8 @@ def render_dependencies(fmi):
 def render_memoized_vals(memoized_vals):
   print 'Memoized vals:'
   for (i, e) in enumerate(memoized_vals):
-    print '  ~~~'
+    print
+    print '  ~~~', e['runtime_ms'], 'ms ~~~'
     print '  Args:', e['args']
 
     try:
@@ -40,23 +41,30 @@ def render_memoized_vals(memoized_vals):
     retval = e['retval']
     assert len(retval) == 1 # retval is formatted as a singleton list
     retval = retval[0]
-    print '  Return value:', retval,' (', e['runtime_ms'], 'ms )'
+    print '  Return value:', retval
 
     if 'stdout_buf' in e:
-      print '  stdout_buf:', repr(e['stdout_buf'])
+      stdout_repr = repr(e['stdout_buf'])
+      if len(stdout_repr) > 50:
+        print '  stdout_buf:', stdout_repr[:50], '< %d total chars >' % len(stdout_repr)
+      else:
+        print '  stdout_buf:', stdout_repr
     if 'stderr_buf' in e:
-      print '  stderr_buf:', repr(e['stderr_buf'])
-
+      stderr_repr = repr(e['stderr_buf'])
+      if len(stderr_repr) > 50:
+        print '  stderr_buf:', stderr_repr[:50], '< %d total chars >' % len(stderr_repr)
+      else:
+        print '  stderr_buf:', stderr_repr
     print
     try:
       file_read_dependencies = e['files_read']
-      print 'Files read:', ','.join(sorted(file_read_dependencies.keys()))
+      print '  Files read:', ','.join(sorted(file_read_dependencies.keys()))
     except KeyError:
       pass
 
     try:
       file_write_dependencies = e['files_written']
-      print 'Files written:', ','.join(sorted(file_write_dependencies.keys()))
+      print '  Files written:', ','.join(sorted(file_write_dependencies.keys()))
     except KeyError:
       pass
 
