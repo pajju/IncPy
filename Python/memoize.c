@@ -1808,6 +1808,10 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         PyObject_DelItem(memoized_vals_lst, tmp_idx);
         Py_DECREF(tmp_idx);
 
+        PG_LOG_PRINTF("dict(event='CLEAR_CACHE_ENTRY', idx=%u, what'%s')\n",
+                      (unsigned)memoized_vals_idx,
+                      PyString_AsString(co->pg_canonical_name));
+
         break; // get the heck out of this loop!!!
       }
 
