@@ -377,22 +377,31 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
   UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
   UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
 
+  //printf("set_creation_time: %p (%p %p %p %p)\n",
+  //       (void*)obj, (void*)level_1_addr, (void*)level_2_addr, (void*)level_3_addr, (void*)level_4_addr);
+
   obj_metadata*** level_2_map = level_1_map[level_1_addr];
   if (!level_2_map) {
     level_2_map = level_1_map[level_1_addr] = PyMem_New(obj_metadata**, METADATA_MAP_SIZE);
     memset(level_2_map, 0, sizeof(obj_metadata**) * METADATA_MAP_SIZE);
+    //printf("  NEW level_2_map %p (size=%d)\n", (void*)level_1_addr,
+    //       sizeof(obj_metadata**) * METADATA_MAP_SIZE);
   }
 
   obj_metadata** level_3_map = level_2_map[level_2_addr];
   if (!level_3_map) {
     level_3_map = level_2_map[level_2_addr] = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
     memset(level_3_map, 0, sizeof(obj_metadata*) * METADATA_MAP_SIZE);
+    //printf("  NEW level_3_map %p (size=%d)\n", (void*)level_2_addr,
+    //       sizeof(obj_metadata*) * METADATA_MAP_SIZE);
   }
 
   obj_metadata* level_4_map = level_3_map[level_3_addr];
   if (!level_4_map) {
     level_4_map = level_3_map[level_3_addr] = PyMem_New(obj_metadata, METADATA_MAP_SIZE);
     memset(level_4_map, 0, sizeof(obj_metadata) * METADATA_MAP_SIZE);
+    //printf("  NEW level_4_map %p (size=%d)\n", (void*)level_3_addr,
+    //       sizeof(obj_metadata) * METADATA_MAP_SIZE);
   }
 
   level_4_map[level_4_addr].creation_time = creation_time;
@@ -478,9 +487,13 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
   UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
   UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
 
+  //printf("set_creation_time: %p (%p %p)\n", (void*)obj, (void*)msb16, (void*)lsb16);
+
   if (!level_1_map[msb16]) {
     level_1_map[msb16] = PyMem_New(obj_metadata, METADATA_MAP_SIZE);
     memset(level_1_map[msb16], 0, sizeof(obj_metadata) * METADATA_MAP_SIZE);
+
+    //printf("  NEW level_2_map %p (size=%d)\n", (void*)msb16, sizeof(obj_metadata) * METADATA_MAP_SIZE);
   }
 
   level_1_map[msb16][lsb16].creation_time = creation_time;
