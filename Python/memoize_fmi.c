@@ -33,7 +33,7 @@ FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod) {
   // then set f_code's pointer BACK to yourself
   cod->pg_func_memo_info = new_fmi;
 
-  PyObject* cur_code_dependency = 
+  PyObject* cur_code_dependency =
     PyDict_GetItem(func_name_to_code_dependency, cod->pg_canonical_name);
 
   // if for some reason cod hasn't yet been entered into
@@ -63,9 +63,7 @@ FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod) {
 void DELETE_func_memo_info(FuncMemoInfo* fmi) {
   Py_CLEAR(fmi->memoized_vals);
   Py_CLEAR(fmi->code_dependencies);
-
   Py_CLEAR(fmi->f_code);
-
   PyMem_Del(fmi);
 }
 

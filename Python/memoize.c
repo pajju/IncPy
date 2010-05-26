@@ -168,12 +168,14 @@ static PyObject* numpy_module = NULL;
 // forward declarations:
 static void mark_impure(PyFrameObject* f, char* why);
 static void mark_entire_stack_impure(char* why);
-static void deepcopy_global_and_add_to_dict(PyObject* varname,
-                                            PyObject* value,
-                                            PyObject* output_dict);
+static void deepcopy_and_add_global_read(PyObject* varname,
+                                         PyObject* value,
+                                         PyObject* output_dict);
+static void add_file_dependency(PyObject* filename, PyObject* output_dict);
 
 // to shut gcc up ...
 extern time_t PyOS_GetLastModificationTime(char *, FILE *);
+
 
 // our notion of 'time' within an execution, measured by number of
 // elapsed function calls:
@@ -551,36 +553,6 @@ int obj_equals(PyObject* obj1, PyObject* obj2) {
   }
 
   return cmp_result;
-}
-
-/* Iterates over lst1 and lst2 and calls obj_equals() on each pair of
-   elements, returning 1 iff the lists are identical.  We need to do
-   this rather than directly calling obj_equals() on the two lists, so
-   that we can accommodate for special comparison functions like those
-   used for NumPy arrays. */
-static int lst_equals(PyObject* lst1, PyObject* lst2) {
-  assert(PyList_CheckExact(lst1));
-  assert(PyList_CheckExact(lst2));
-
-  if (lst1 == lst2) {
-    return 1;
-  }
-
-  Py_ssize_t lst1_len = PyList_Size(lst1);
-  Py_ssize_t lst2_len = PyList_Size(lst2);
-
-  if (lst1_len != lst2_len) {
-    return 0;
-  }
-
-  Py_ssize_t i;
-  for (i = 0; i < lst1_len; i++) {
-    if (!obj_equals(PyList_GET_ITEM(lst1, i), PyList_GET_ITEM(lst2, i))) {
-      return 0;
-    }
-  }
-
-  return 1;
 }
 
 
@@ -1434,7 +1406,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   // update ALL callers with a code dependency on you
   // (TODO: can optimize later by only updating your immediate caller and
-  //  then 'bubbling up' changes when it terminates)
+  //  then 'bubbling up' dependencies when it exits)
   PyFrameObject* cur_frame = f->f_back;
   PyObject* my_self_code_dependency = NULL;
   while (cur_frame) {
@@ -1451,7 +1423,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
         // lazy-initialize
         if (!my_self_code_dependency) {
-          my_self_code_dependency = PyDict_GetItem(func_name_to_code_dependency, co->pg_canonical_name);
+          my_self_code_dependency =
+            PyDict_GetItem(func_name_to_code_dependency, co->pg_canonical_name);
           assert(my_self_code_dependency);
         }
 
@@ -1468,7 +1441,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   }
 
 
-  // check that all dependencies are satisfied ...
   if (!are_code_dependencies_satisfied(f->func_memo_info, f)) {
     clear_cache_and_mark_pure(f->func_memo_info);
     USER_LOG_PRINTF("CLEAR_CACHE %s\n", PyString_AsString(co->pg_canonical_name));
@@ -1476,7 +1448,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   }
 
 
-  // by now, all the dependencies are still satisfied ...
+  // by now, all code dependencies are still satisfied ...
 
   PyObject* memoized_vals_lst = get_memoized_vals_lst(f->func_memo_info);
 
@@ -1898,10 +1870,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
 
   // punt completely on all impure functions
-  //
-  // VERY SUBTLE: we must put this code AFTER the code to add global
-  // variable dependencies (from f->globals_read_set), since impure
-  // functions should still maintain global variable dependencies
   if (my_func_memo_info->is_impure) {
     USER_LOG_PRINTF("CANNOT_MEMOIZE %s | impure | runtime %ld ms\n",
                     PyString_AsString(canonical_name), runtime_ms);
@@ -2064,7 +2032,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   assert(Py_REFCNT(retval_copy) > 0);
 
 
-  // now memoize results into func_memo_info['memoized_vals']:
+  // now memoize results ...
 
   PyObject* memoized_vals_lst = get_memoized_vals_lst(my_func_memo_info);
 
@@ -2108,7 +2076,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       PyObject* val = find_globally_reachable_obj_by_name(global_varname_tuple, f);
 
       if (val) {
-        deepcopy_global_and_add_to_dict(global_varname_tuple, val, global_vars_read);
+        deepcopy_and_add_global_read(global_varname_tuple, val, global_vars_read);
       }
       else {
 #ifdef ENABLE_DEBUG_LOGGING
@@ -2125,56 +2093,22 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   if (f->files_read_set) {
     PyObject* files_read = PyDict_New();
-
-    // TODO: what should we do about inserting duplicates?
-
     Py_ssize_t s_pos = 0;
     PyObject* read_filename;
     while (_PySet_Next(f->files_read_set, &s_pos, &read_filename)) {
-      char* filename_cstr = PyString_AsString(read_filename);
-      FILE* fp = fopen(filename_cstr, "r");
-      // it's possible that this file no longer exists (e.g., it was a
-      // temp file that already got deleted) ... right now, let's punt
-      // on those files, but perhaps there should be a better solution
-      // in the future:
-      if (fp) {
-        time_t mtime = PyOS_GetLastModificationTime(filename_cstr, fp);
-        fclose(fp);
-        assert (mtime >= 0); // -1 is an error value
-        PyObject* mtime_obj = PyLong_FromLong((long)mtime);
-        PyDict_SetItem(files_read, read_filename, mtime_obj);
-        Py_DECREF(mtime_obj);
-      }
+      add_file_dependency(read_filename, files_read);
     }
-
     PyDict_SetItemString(memo_table_entry, "files_read", files_read);
     Py_DECREF(files_read);
   }
 
   if (f->files_written_set) {
     PyObject* files_written = PyDict_New();
-
-    // TODO: what should we do about inserting duplicates?
-
     Py_ssize_t s_pos = 0;
     PyObject* written_filename;
     while (_PySet_Next(f->files_written_set, &s_pos, &written_filename)) {
-      char* filename_cstr = PyString_AsString(written_filename);
-      FILE* fp = fopen(filename_cstr, "r");
-      // it's possible that this file no longer exists (e.g., it was a
-      // temp file that already got deleted) ... right now, let's punt
-      // on those files, but perhaps there should be a better solution
-      // in the future:
-      if (fp) {
-        time_t mtime = PyOS_GetLastModificationTime(filename_cstr, fp);
-        fclose(fp);
-        assert (mtime >= 0); // -1 is an error value
-        PyObject* mtime_obj = PyLong_FromLong((long)mtime);
-        PyDict_SetItem(files_written, written_filename, mtime_obj);
-        Py_DECREF(mtime_obj);
-      }
+      add_file_dependency(written_filename, files_written);
     }
-
     PyDict_SetItemString(memo_table_entry, "files_written", files_written);
     Py_DECREF(files_written);
   }
@@ -2186,6 +2120,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   // we're just gonna blindly append memo_table_entry assuming that
   // there are no 'duplicates' in memoized_vals_lst
+  //
   // (if this assumption is violated, then we will get some
   // funny-looking results ... but I think I should be able to convince
   // myself of why duplicates should never occur)
@@ -2210,15 +2145,15 @@ pg_exit_frame_done:
 }
 
 
-// perform: output_dict[varname] = deepcopy(value)
+// Perform: output_dict[varname] = deepcopy(value)
 //
 // (punting on values that cannot be safely pickled)
 //
 //   varname can be munged by find_globally_reachable_obj_by_name()
 //   (it's either a string or a tuple of strings)
-static void deepcopy_global_and_add_to_dict(PyObject* varname,
-                                            PyObject* value,
-                                            PyObject* output_dict) {
+static void deepcopy_and_add_global_read(PyObject* varname,
+                                         PyObject* value,
+                                         PyObject* output_dict) {
   // quick-check since a lot of passed-in values are modules,
   // which are NOT picklable ... seems to speed things up slightly
   if (PyModule_CheckExact(value)) {
@@ -2302,6 +2237,24 @@ static void deepcopy_global_and_add_to_dict(PyObject* varname,
 
     assert(PyErr_Occurred());
     PyErr_Clear();
+  }
+}
+
+// Perform: output_dict[filename] = last_modification_time(File(filename))
+static void add_file_dependency(PyObject* filename, PyObject* output_dict) {
+  char* filename_cstr = PyString_AsString(filename);
+  FILE* fp = fopen(filename_cstr, "r");
+
+  // it's possible that this file no longer exists (e.g., it was a
+  // temp file that already got deleted) ... right now, let's punt on
+  // those files, but perhaps there'll be a better future solution:
+  if (fp) {
+    time_t mtime = PyOS_GetLastModificationTime(filename_cstr, fp);
+    fclose(fp);
+    assert (mtime >= 0); // -1 is an error value
+    PyObject* mtime_obj = PyLong_FromLong((long)mtime);
+    PyDict_SetItem(output_dict, filename, mtime_obj);
+    Py_DECREF(mtime_obj);
   }
 }
 
@@ -2714,7 +2667,6 @@ void pg_FILE_OPEN_event(PyFileObject* fobj) {
       if (f->func_memo_info) {
         LAZY_INIT_SET_ADD(f->files_opened_w_set, fobj->f_name);
         LAZY_INIT_SET_ADD(f->files_written_set, fobj->f_name);
-
       }
       f = f->f_back;
     }
@@ -2768,7 +2720,6 @@ void pg_FILE_READ_event(PyFileObject* fobj) {
   MEMOIZE_PUBLIC_END()
 }
 
-// adds a file read dependency to the top-most NON-IGNORED frame
 // (PRIVATE version, don't call from outside code)
 static void private_FILE_READ_event(PyFileObject* fobj) {
   assert(fobj);

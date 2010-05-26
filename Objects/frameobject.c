@@ -442,6 +442,7 @@ frame_dealloc(PyFrameObject *f)
   Py_CLEAR(f->files_closed_set);
   Py_CLEAR(f->files_read_set);
   Py_CLEAR(f->globals_read_set);
+  // no need to clear f->func_memo_info since it's a weak reference
   Py_CLEAR(f->stored_args_lst);
 
 
