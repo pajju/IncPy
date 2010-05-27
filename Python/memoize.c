@@ -542,6 +542,22 @@ static PyObject* create_proxy_object(PyObject* obj) {
 
     return ret;
   }
+  // for functions, create a tuple: ('FunctionProxy', <canonical name>)
+  else if (PyFunction_Check(obj)) {
+    PyFunctionObject* f = (PyFunctionObject*)obj;
+    PyCodeObject* cod = (PyCodeObject*)f->func_code;
+    if (cod->pg_canonical_name) {
+      PyObject* proxy_tag = PyString_FromString("FunctionProxy");
+      PyObject* ret = PyTuple_Pack(2, proxy_tag, cod->pg_canonical_name);
+      Py_DECREF(proxy_tag);
+
+      return ret;
+    }
+    // if you don't have a canonical name, then punt ...
+    else {
+      return NULL;
+    }
+  }
   else {
     const char* obj_typename = Py_TYPE(obj)->tp_name;
 
