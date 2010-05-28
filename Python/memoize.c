@@ -47,7 +47,17 @@ which gives you NO time savings :(
 However, with trust_prev_memoized_results activated, IncPy simply trusts
 the previously-cached results of a function, even if its code changes.
 While this is unsafe in general, I think that there are a large class of
-edits for which this is actually safe. */
+edits for which this is actually safe.
+
+ewencp also added that even if the results from previously-processed
+records are WRONG after the code change, this -T mode can still be very
+useful because he simply wants to skip the computation of previous
+results and get on with munging of the not-yet-processed records (so
+that he can hash out any remaining bugs in his code) ... at the VERY
+END, after he's knocked off all the bugs, he will then do a FULL run to
+compute the FINAL definitive results.
+
+ */
 int trust_prev_memoized_results = 0;
 
 
