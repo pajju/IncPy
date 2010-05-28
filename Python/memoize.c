@@ -27,6 +27,29 @@
 #include <sys/stat.h>
 #include <string.h>
 
+/* blindly trust the memoized results of previous executions, even if
+   your code has changed (unsound in general, but effective in cases
+   where the user knows what he/she is doing)
+
+   activated by '-T' command-line option (see Modules/main.c)
+
+Oftentimes what happens is that you're writing a function to process
+individual records in a dataset (ranging from 1 to N).  It runs fine
+until it crashes on one record number i somewhere in the middle of your
+dataset since that record contained some unexpected data.  With IncPy,
+the results from processing records 1 through (i - 1) have been memoized
+to disk, so if you re-run your script, you can re-use those results.
+But since your code crashed, you probably want to modify it before
+re-running.  However, since your code has been modified, IncPy must
+invalidate the cache entries for processing records 1 through (i - 1),
+which gives you NO time savings :(
+
+However, with trust_prev_memoized_results activated, IncPy simply trusts
+the previously-cached results of a function, even if its code changes.
+While this is unsafe in general, I think that there are a large class of
+edits for which this is actually safe. */
+int trust_prev_memoized_results = 0;
+
 
 // Note that ALL of these options #ifdef flags should be only limited to
 // THIS FILE, since if you use them in other files, they will likely not
@@ -1270,16 +1293,17 @@ void pg_initialize() {
 
 
   assert(ignore_paths_lst);
-  if (PyList_Size(ignore_paths_lst) > 0) {
-    PyObject* tmp_str = PyObject_Repr(ignore_paths_lst);
-    USER_LOG_PRINTF("=== %s START | TIME_LIMIT %u sec | IGNORE %s\n",
-                    time_buf,
-                    memoize_time_limit_ms / 1000,
-                    PyString_AsString(tmp_str));
-    Py_DECREF(tmp_str);
+  tmp_str = PyObject_Repr(ignore_paths_lst);
+  USER_LOG_PRINTF("=== %s START | TIME_LIMIT %u sec | IGNORE %s",
+                  time_buf,
+                  memoize_time_limit_ms / 1000,
+                  PyString_AsString(tmp_str));
+  Py_DECREF(tmp_str);
+  if (trust_prev_memoized_results) {
+    USER_LOG_PRINTF(" | TRUST_PREV_RESULTS\n");
   }
   else {
-    USER_LOG_PRINTF("=== %s START\n", time_buf);
+    USER_LOG_PRINTF("\n");
   }
 
   init_self_mutator_c_methods();
@@ -1590,9 +1614,16 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
 
   if (!are_code_dependencies_satisfied(f->func_memo_info, f)) {
-    clear_cache_and_mark_pure(f->func_memo_info);
-    USER_LOG_PRINTF("CLEAR_CACHE %s\n", PyString_AsString(co->pg_canonical_name));
-    goto pg_enter_frame_done;
+    if (trust_prev_memoized_results) {
+      fprintf(stderr, "WARNING: trusting possibly outdated results for %s\n",
+              PyString_AsString(co->pg_canonical_name));
+      USER_LOG_PRINTF("TRUSTING_MEMOIZED_RESULTS %s\n", PyString_AsString(co->pg_canonical_name));
+    }
+    else {
+      clear_cache_and_mark_pure(f->func_memo_info);
+      USER_LOG_PRINTF("CLEAR_CACHE %s\n", PyString_AsString(co->pg_canonical_name));
+      goto pg_enter_frame_done;
+    }
   }
 
 

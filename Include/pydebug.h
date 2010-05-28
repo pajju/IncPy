@@ -27,6 +27,8 @@ PyAPI_DATA(int) _Py_QnewFlag;
 /* Warn about 3.x issues */
 PyAPI_DATA(int) Py_Py3kWarningFlag;
 
+PyAPI_DATA(int) trust_prev_memoized_results; // pgbovine
+
 /* this is a wrapper around getenv() that pays attention to
    Py_IgnoreEnvironmentFlag.  It should be used for getting variables like
    PYTHONPATH and PYTHONHOME from the environment */

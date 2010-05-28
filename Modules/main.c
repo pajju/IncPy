@@ -41,7 +41,7 @@ static char **orig_argv;
 static int  orig_argc;
 
 /* command line options */
-#define BASE_OPTS "3bBc:dEhiJm:OQ:sStuUvVW:xX?"
+#define BASE_OPTS "3bBc:dEhiJm:OQ:sStuUvVW:xX?T" // pgbovine - added 'T' option
 
 #ifndef RISCOS
 #define PROGRAM_OPTS BASE_OPTS
@@ -58,6 +58,12 @@ static char *usage_line =
 "usage: %s [option] ... [-c cmd | -m mod | file | -] [arg] ...\n";
 
 /* Long usage message, split into parts < 512 bytes */
+
+// pgbovine
+static char *incpy_usage = "\
+IncPy-specific options:\n\
+-T     : trust memoized results from previous execution\n\n";
+
 static char *usage_1 = "\
 Options and arguments (and corresponding environment variables):\n\
 -B     : don't write .py[co] files on import; also PYTHONDONTWRITEBYTECODE=x\n\
@@ -113,6 +119,7 @@ usage(int exitcode, char* program)
 	if (exitcode)
 		fprintf(f, "Try `python -h' for more information.\n");
 	else {
+		fprintf(f, incpy_usage);
 		fprintf(f, usage_1);
 		fprintf(f, usage_2);
 		fprintf(f, usage_3);
@@ -417,6 +424,11 @@ Py_Main(int argc, char **argv)
 			break;
 
 		/* This space reserved for other options */
+
+    // pgbovine
+    case 'T':
+      trust_prev_memoized_results++;
+      break;
 
 		default:
 			return usage(2, argv[0]);
