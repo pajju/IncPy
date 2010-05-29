@@ -473,59 +473,68 @@ unsigned int get_creation_time(PyObject* obj) {
 #else
 // 32-bit architecture
 
-PyObject* global_container_shadow_dict = NULL;
-PyObject* creation_time_shadow_dict = NULL;
+pyobj_metadata* pyobj_metadata_map = NULL;
 
 void set_global_container(PyObject* obj, PyObject* global_container) {
-  if (!global_container_shadow_dict) return;
+  void* key = (void*)obj;
+  pyobj_metadata* existing_entry = NULL;
+  HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
 
-  PyObject* obj_addr = PyLong_FromLong((long)obj);
-  PyDict_SetItem(global_container_shadow_dict, obj_addr, global_container);
-  Py_DECREF(obj_addr);
+  if (existing_entry) {
+    existing_entry->global_container_weakref = global_container;
+  }
+  else {
+    pyobj_metadata* new_entry = PyMem_New(pyobj_metadata, 1);
+    new_entry->obj_key = key;
+    new_entry->creation_time = 0;
+    new_entry->global_container_weakref = global_container;
+    HASH_ADD_PTR(pyobj_metadata_map, obj_key, new_entry);
+  }
 }
 
 PyObject* get_global_container(PyObject* obj) {
-  if (!global_container_shadow_dict) return NULL;
+  void* key = (void*)obj;
+  pyobj_metadata* existing_entry = NULL;
+  HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
 
-  PyObject* obj_addr = PyLong_FromLong((long)obj);
-  PyObject* ret = PyDict_GetItem(global_container_shadow_dict, obj_addr);
-  Py_DECREF(obj_addr);
-
-  return ret;
+  if (existing_entry) {
+    return existing_entry->global_container_weakref;
+  }
+  else {
+    return NULL;
+  }
 }
 
 void set_creation_time(PyObject* obj, unsigned int creation_time) {
-  return;
   // fast-path ... don't do anything when creation_time is 0!
   if (creation_time == 0) {
     return;
   }
 
-  MEMOIZE_PUBLIC_START()
-  PyObject* obj_addr = PyLong_FromLong((long)obj);
-  PyObject* creation_time_obj = PyLong_FromLong((long)creation_time);
-  MEMOIZE_PUBLIC_END()
+  void* key = (void*)obj;
+  pyobj_metadata* existing_entry = NULL;
+  HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
 
-  PyDict_SetItem(creation_time_shadow_dict, obj_addr, creation_time_obj);
-  Py_DECREF(creation_time_obj);
-  Py_DECREF(obj_addr);
-
+  if (existing_entry) {
+    existing_entry->creation_time = creation_time;
+  }
+  else {
+    pyobj_metadata* new_entry = PyMem_New(pyobj_metadata, 1);
+    new_entry->obj_key = key;
+    new_entry->creation_time = creation_time;
+    new_entry->global_container_weakref = NULL;
+    HASH_ADD_PTR(pyobj_metadata_map, obj_key, new_entry);
+  }
 }
 
 // return 0 if not found (earliest possible creation time)
 unsigned int get_creation_time(PyObject* obj) {
-  return 0;
-  MEMOIZE_PUBLIC_START_RETNULL()
+  void* key = (void*)obj;
+  pyobj_metadata* existing_entry = NULL;
+  HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
 
-  PyObject* obj_addr = PyLong_FromLong((long)obj);
-  PyObject* creation_time_obj = PyDict_GetItem(creation_time_shadow_dict, obj_addr);
-  Py_DECREF(obj_addr);
-
-  MEMOIZE_PUBLIC_END()
-
-  if (creation_time_obj) {
-    unsigned int ret = (unsigned int)(PyLong_AsLong(creation_time_obj));
-    return ret;
+  if (existing_entry) {
+    return existing_entry->creation_time;
   }
   else {
     return 0;
@@ -533,6 +542,20 @@ unsigned int get_creation_time(PyObject* obj) {
 }
 
 #endif
+
+// TODO: this is sort of slow :(  ugh
+void pg_dealloc_obj(PyObject* obj) {
+  void* key = (void*)obj;
+  pyobj_metadata* existing_entry = NULL;
+  HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
+
+  // don't worry about deallocating entry (since it will probably be
+  // re-allocated soon anyways for another object, but DO NULL OUT
+  // global_container_weakref (required for correctness)
+  if (existing_entry) {
+    existing_entry->global_container_weakref = NULL;
+  }
+}
 
 /* proxy objects - for objects that can't be pickled, we can instead
    create picklable proxies in their place */
@@ -1065,11 +1088,6 @@ void pg_initialize() {
     Py_Exit(1);
   }
 
-  //level_1_map = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
-  //memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
-
-  global_container_shadow_dict = PyDict_New();
-  creation_time_shadow_dict = PyDict_New();
 #endif
 
 

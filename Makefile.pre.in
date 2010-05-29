@@ -602,6 +602,7 @@ PYTHON_HEADERS= \
 		Include/bufferobject.h \
 		Include/cellobject.h \
 		Include/ceval.h \
+		Include/uthash.h \
 		Include/memoize.h \
 		Include/memoize_fmi.h \
 		Include/memoize_COW.h \

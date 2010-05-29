@@ -167,6 +167,25 @@ obj_metadata**** level_1_map;
 // lazy-initialize to an array of METADATA_MAP_SIZE:
 #endif
 
+#include "uthash.h" // for hash table
+
+typedef struct {
+  void* obj_key; // WEAK REFERENCE - the key for the hash table entry
+
+  unsigned int creation_time; // measured in number of elapsed function calls
+  /* WEAK REFERENCE - This should only be set for MUTABLE values
+     (see update_global_container_weakref() for more details on why)
+
+     since this is a weak reference, make sure that there's at least
+     ONE other reference to this object, so that it doesn't get
+     garbage collected */
+  PyObject* global_container_weakref;
+
+  UT_hash_handle hh; // make it viable for insertion into a uthash hash table
+} pyobj_metadata;
+
+
+
 void set_global_container(PyObject* obj, PyObject* global_container);
 PyObject* get_global_container(PyObject* obj);
 
