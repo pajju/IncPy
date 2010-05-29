@@ -498,18 +498,20 @@ void set_global_container(PyObject* obj, PyObject* global_container) {
   UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
   UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
 
-  if (!level_1_map[msb16]) {
-    level_1_map[msb16] = PyMem_New(obj_metadata_array, 1);
-    memset(level_1_map[msb16], 0, sizeof(obj_metadata_array));
+  obj_metadata_array* level_2_map = level_1_map[msb16];
+
+  if (!level_2_map) {
+    level_2_map = level_1_map[msb16] = PyMem_New(obj_metadata_array, 1);
+    memset(level_2_map, 0, sizeof(obj_metadata_array));
     //printf("  sgc NEW level_2_map %p (size=%d)\n", (void*)msb16, sizeof(obj_metadata_array));
   }
 
-  if (!level_1_map[msb16]->elts[lsb16].allocated) {
-    level_1_map[msb16]->elts[lsb16].allocated = 1;
-    level_1_map[msb16]->num_allocated_elts++;
+  if (!level_2_map->elts[lsb16].allocated) {
+    level_2_map->elts[lsb16].allocated = 1;
+    level_2_map->num_allocated_elts++;
   }
 
-  level_1_map[msb16]->elts[lsb16].global_container_weakref = global_container;
+  level_2_map->elts[lsb16].global_container_weakref = global_container;
 }
 
 PyObject* get_global_container(PyObject* obj) {
@@ -543,18 +545,20 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
 
   //printf("set_creation_time: %p (%p %p)\n", (void*)obj, (void*)msb16, (void*)lsb16);
 
-  if (!level_1_map[msb16]) {
-    level_1_map[msb16] = PyMem_New(obj_metadata_array, 1);
-    memset(level_1_map[msb16], 0, sizeof(obj_metadata_array));
+  obj_metadata_array* level_2_map = level_1_map[msb16];
+
+  if (!level_2_map) {
+    level_2_map = level_1_map[msb16] = PyMem_New(obj_metadata_array, 1);
+    memset(level_2_map, 0, sizeof(obj_metadata_array));
     //printf("  sct NEW level_2_map %p (size=%d)\n", (void*)msb16, sizeof(obj_metadata_array));
   }
 
-  if (!level_1_map[msb16]->elts[lsb16].allocated) {
-    level_1_map[msb16]->elts[lsb16].allocated = 1;
-    level_1_map[msb16]->num_allocated_elts++;
+  if (!level_2_map->elts[lsb16].allocated) {
+    level_2_map->elts[lsb16].allocated = 1;
+    level_2_map->num_allocated_elts++;
   }
 
-  level_1_map[msb16]->elts[lsb16].creation_time = creation_time;
+  level_2_map->elts[lsb16].creation_time = creation_time;
 
   // sanity check - comment out for speed:
   assert(get_creation_time(obj) == creation_time);
@@ -579,26 +583,31 @@ unsigned int get_creation_time(PyObject* obj) {
 
 // called whenever an object is deallocated
 void pg_dealloc_object(PyObject* obj) {
+  if (!level_1_map) {
+    return;
+  }
+
   UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
   UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
 
   //printf("DEALLOC %p %p\n", (void*)msb16, (void*)lsb16);
 
-  if (level_1_map &&
-      level_1_map[msb16] &&
-      level_1_map[msb16]->elts[lsb16].allocated) {
+  obj_metadata_array* level_2_map = level_1_map[msb16];
+
+  if (level_2_map &&
+      level_2_map->elts[lsb16].allocated) {
     // deallocate shadow entry:
-    memset(&level_1_map[msb16]->elts[lsb16], 0, sizeof(obj_metadata));
-    assert(level_1_map[msb16]->num_allocated_elts > 0);
-    level_1_map[msb16]->num_allocated_elts--;
+    memset(&level_2_map->elts[lsb16], 0, sizeof(obj_metadata));
+    assert(level_2_map->num_allocated_elts > 0);
+    level_2_map->num_allocated_elts--;
 
-    if (level_1_map[msb16]->num_allocated_elts == 0) {
+    if (level_2_map->num_allocated_elts == 0) {
       // can take a long time to run, only activate in debug mode
-      assert(obj_metadata_array_is_empty(level_1_map[msb16]));
+      assert(obj_metadata_array_is_empty(level_2_map));
 
-      //printf("  FREE %p\n", (void*)msb16);
-      PyMem_Del(level_1_map[msb16]);
-      level_1_map[msb16] = NULL;
+      printf("  FREE %p\n", (void*)msb16);
+      PyMem_Del(level_2_map);
+      level_1_map[msb16] = NULL; // REALLY important!!!
     }
   }
 }
