@@ -143,8 +143,12 @@ typedef unsigned long long int  UInt64;
    default PyObject struct layout, so if we change PyObject by adding
    fields to it, then we will need to re-compile those libraries,
    which is a big pain! */
+
+// allocate and zero out in pg_initialize():
+#ifdef HOST_IS_64BIT
+// 64-bit architecture
+
 typedef struct {
-  unsigned int creation_time; // measured in number of elapsed function calls
   /* WEAK REFERENCE - This should only be set for MUTABLE values
      (see update_global_container_weakref() for more details on why)
 
@@ -152,21 +156,50 @@ typedef struct {
      ONE other reference to this object, so that it doesn't get
      garbage collected */
   PyObject* global_container_weakref;
+
+  unsigned int creation_time; // measured in number of elapsed function calls
+  char allocated;
 } obj_metadata;
 
-// allocate and zero out in pg_initialize():
-#ifdef HOST_IS_64BIT
-// 64-bit architecture
+typedef struct {
+  // number of elements in elts with allocated bit set to 1
+  unsigned int num_allocated_elts;
+
+  obj_metadata elts[METADATA_MAP_SIZE];
+} obj_metadata_array;
+
 
 // lazy-initialize each to an array of METADATA_MAP_SIZE
-obj_metadata**** level_1_map;
+obj_metadata_array**** level_1_map;
 
 #else
 // 32-bit architecture
 
-// lazy-initialize to an array of METADATA_MAP_SIZE:
-obj_metadata** level_1_map;
+typedef struct {
+  /* WEAK REFERENCE - This should only be set for MUTABLE values
+     (see update_global_container_weakref() for more details on why)
+
+     since this is a weak reference, make sure that there's at least
+     ONE other reference to this object, so that it doesn't get
+     garbage collected */
+  PyObject* global_container_weakref;
+
+  unsigned int allocated : 1;
+  unsigned int creation_time : 31; // measured in number of elapsed function calls
+} obj_metadata;
+
+typedef struct {
+  // number of elements in elts with allocated bit set to 1
+  unsigned int num_allocated_elts;
+
+  obj_metadata elts[METADATA_MAP_SIZE];
+} obj_metadata_array;
+
+
+obj_metadata_array** level_1_map;
+
 #endif
+
 
 void set_global_container(PyObject* obj, PyObject* global_container);
 PyObject* get_global_container(PyObject* obj);

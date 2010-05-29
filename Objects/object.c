@@ -2226,6 +2226,7 @@ _Py_Dealloc(PyObject *op)
 	destructor dealloc = Py_TYPE(op)->tp_dealloc;
 	_Py_ForgetReference(op);
 	(*dealloc)(op);
+  pg_dealloc_object(op); // pgbovine
 }
 
 /* Print all live objects.  Because PyObject_Print is called, the
