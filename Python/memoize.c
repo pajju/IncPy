@@ -473,84 +473,62 @@ unsigned int get_creation_time(PyObject* obj) {
 #else
 // 32-bit architecture
 
-obj_metadata** level_1_map = NULL;
+PyObject* global_container_shadow_dict = NULL;
+PyObject* creation_time_shadow_dict = NULL;
 
 void set_global_container(PyObject* obj, PyObject* global_container) {
-  if (!level_1_map) {
-    return;
-  }
+  if (!global_container_shadow_dict) return;
 
-  assert(global_container);
-
-  UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
-  UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
-
-  if (!level_1_map[msb16]) {
-    level_1_map[msb16] = PyMem_New(obj_metadata, METADATA_MAP_SIZE);
-    memset(level_1_map[msb16], 0, sizeof(obj_metadata) * METADATA_MAP_SIZE);
-  }
-
-  level_1_map[msb16][lsb16].global_container_weakref = global_container;
+  PyObject* obj_addr = PyLong_FromLong((long)obj);
+  PyDict_SetItem(global_container_shadow_dict, obj_addr, global_container);
+  Py_DECREF(obj_addr);
 }
 
 PyObject* get_global_container(PyObject* obj) {
-  if (!level_1_map) {
-    return NULL;
-  }
+  if (!global_container_shadow_dict) return NULL;
 
-  UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
-  UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
+  PyObject* obj_addr = PyLong_FromLong((long)obj);
+  PyObject* ret = PyDict_GetItem(global_container_shadow_dict, obj_addr);
+  Py_DECREF(obj_addr);
 
-  if (!level_1_map[msb16]) {
-    return NULL;
-  }
-  else {
-    return level_1_map[msb16][lsb16].global_container_weakref;
-  }
+  return ret;
 }
 
 void set_creation_time(PyObject* obj, unsigned int creation_time) {
-  if (!level_1_map) {
-    return;
-  }
-
+  return;
   // fast-path ... don't do anything when creation_time is 0!
   if (creation_time == 0) {
     return;
   }
 
-  UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
-  UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
+  MEMOIZE_PUBLIC_START()
+  PyObject* obj_addr = PyLong_FromLong((long)obj);
+  PyObject* creation_time_obj = PyLong_FromLong((long)creation_time);
+  MEMOIZE_PUBLIC_END()
 
-  //printf("set_creation_time: %p (%p %p)\n", (void*)obj, (void*)msb16, (void*)lsb16);
+  PyDict_SetItem(creation_time_shadow_dict, obj_addr, creation_time_obj);
+  Py_DECREF(creation_time_obj);
+  Py_DECREF(obj_addr);
 
-  if (!level_1_map[msb16]) {
-    level_1_map[msb16] = PyMem_New(obj_metadata, METADATA_MAP_SIZE);
-    memset(level_1_map[msb16], 0, sizeof(obj_metadata) * METADATA_MAP_SIZE);
-
-    //printf("  NEW level_2_map %p (size=%d)\n", (void*)msb16, sizeof(obj_metadata) * METADATA_MAP_SIZE);
-  }
-
-  level_1_map[msb16][lsb16].creation_time = creation_time;
-
-  // sanity check - comment out for speed:
-  //assert(get_creation_time(obj) == creation_time);
 }
 
 // return 0 if not found (earliest possible creation time)
 unsigned int get_creation_time(PyObject* obj) {
-  if (!level_1_map) {
-    return 0;
-  }
+  return 0;
+  MEMOIZE_PUBLIC_START_RETNULL()
 
-  UInt16 msb16 = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
-  UInt16 lsb16 = ((UInt32)obj) & METADATA_MAP_MASK;
+  PyObject* obj_addr = PyLong_FromLong((long)obj);
+  PyObject* creation_time_obj = PyDict_GetItem(creation_time_shadow_dict, obj_addr);
+  Py_DECREF(obj_addr);
 
-  if (!level_1_map[msb16]) {
-    return 0;
+  MEMOIZE_PUBLIC_END()
+
+  if (creation_time_obj) {
+    unsigned int ret = (unsigned int)(PyLong_AsLong(creation_time_obj));
+    return ret;
   }
   else {
-    return level_1_map[msb16][lsb16].creation_time;
+    return 0;
   }
 }
 
@@ -1087,8 +1065,11 @@ void pg_initialize() {
     Py_Exit(1);
   }
 
-  level_1_map = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
-  memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
+  //level_1_map = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
+  //memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
+
+  global_container_shadow_dict = PyDict_New();
+  creation_time_shadow_dict = PyDict_New();
 #endif
 
 

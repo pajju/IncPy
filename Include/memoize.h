@@ -165,7 +165,6 @@ obj_metadata**** level_1_map;
 // 32-bit architecture
 
 // lazy-initialize to an array of METADATA_MAP_SIZE:
-obj_metadata** level_1_map;
 #endif
 
 void set_global_container(PyObject* obj, PyObject* global_container);
