@@ -605,7 +605,7 @@ void pg_dealloc_object(PyObject* obj) {
       // can take a long time to run, only activate in debug mode
       assert(obj_metadata_array_is_empty(level_2_map));
 
-      printf("  FREE %p\n", (void*)msb16);
+      //printf("  FREE %p\n", (void*)msb16);
       PyMem_Del(level_2_map);
       level_1_map[msb16] = NULL; // REALLY important!!!
     }
