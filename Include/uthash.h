@@ -316,6 +316,9 @@ do {                                                                            
 #define HASH_EMIT_KEY(hh,head,keyptr,fieldlen)                    
 #endif
 
+// pgbovine - try out some different hash functions
+#define HASH_FUNCTION HASH_PGBOVINE
+
 /* default to Jenkin's hash unless overridden e.g. DHASH_FUNCTION=HASH_SAX */
 #ifdef HASH_FUNCTION 
 #define HASH_FCN HASH_FUNCTION
@@ -332,6 +335,14 @@ do {                                                                            
   while (_hb_keylen--)  { (hashv) = ((hashv) * 33) + *_hb_key++; }               \
   bkt = (hashv) & (num_bkts-1);                                                  \
 } while (0)
+
+/* pgbovine - custom hash function for pointers */
+#define HASH_PGBOVINE(key,keylen,num_bkts,hashv,bkt)                             \
+do {                                                                             \
+  hashv = ((unsigned int)key) >> (sizeof(void*) - 1);                            \
+  bkt = (hashv) & (num_bkts-1);                                                  \
+} while (0)
+
 
 
 /* SAX/FNV/OAT/JEN hash functions are macro variants of those listed at 

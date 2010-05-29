@@ -512,6 +512,7 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
   }
 
   void* key = (void*)obj;
+  //printf("%p %u %u\n", key, (unsigned int)key, ((unsigned int)key) >> (sizeof(void*) - 1));
   pyobj_metadata* existing_entry = NULL;
   HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
 
