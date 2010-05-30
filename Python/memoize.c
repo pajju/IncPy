@@ -350,7 +350,7 @@ void set_global_container(PyObject* obj, PyObject* global_container) {
   }
 
   // slow sanity check:
-  assert(get_global_container(obj) == global_container);
+  //assert(get_global_container(obj) == global_container);
 }
 
 PyObject* get_global_container(PyObject* obj) {
@@ -388,7 +388,7 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
   }
 
   // slow sanity check:
-  assert(get_creation_time(obj) == creation_time);
+  //assert(get_creation_time(obj) == creation_time);
 }
 
 // return 0 if not found (earliest possible creation time)
