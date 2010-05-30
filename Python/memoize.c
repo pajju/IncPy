@@ -469,10 +469,6 @@ unsigned int get_creation_time(PyObject* obj) {
   return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr][level_5_addr].creation_time;
 }
 
-void pg_obj_dealloc(PyObject* obj) {
-  // TODO: implement clearing of global_container_weakref field
-}
-
 #else
 // 32-bit architecture
 
@@ -549,11 +545,19 @@ unsigned int get_creation_time(PyObject* obj) {
   return level_1_map[level_1_addr][level_2_addr].creation_time;
 }
 
+#endif
+
 void pg_obj_dealloc(PyObject* obj) {
-  // TODO: implement clearing of global_container_weakref field
+  /* for correctness, we must null out global_container_weakref when the
+     object is deallocated, so that a future object allocated at the
+     same address won't have this stale global_container_weakref (we
+     don't need to null out creation_time, since it will be updated when
+     a new object is created at the same address as obj) */
+  if (get_global_container(obj)) {
+    set_global_container(obj, NULL);
+  }
 }
 
-#endif
 
 /* proxy objects - for objects that can't be pickled, we can instead
    create picklable proxies in their place */

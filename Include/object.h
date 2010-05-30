@@ -739,9 +739,11 @@ extern unsigned int num_executed_func_calls;
 
 #define _Py_ForgetReference(op) _Py_INC_TPFREES(op)
 
+// pgbovine - call pg_obj_dealloc to pick up deallocations
 #define _Py_Dealloc(op) (				\
 	_Py_INC_TPFREES(op) _Py_COUNT_ALLOCS_COMMA	\
-	(*Py_TYPE(op)->tp_dealloc)((PyObject *)(op)))
+	(*Py_TYPE(op)->tp_dealloc)((PyObject *)(op)) , \
+  pg_obj_dealloc(op) )
 #endif /* !Py_TRACE_REFS */
 
 #define Py_INCREF(op) (				\
