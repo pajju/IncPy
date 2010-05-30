@@ -380,8 +380,6 @@ void set_global_container(PyObject* obj, PyObject* global_container) {
     return;
   }
 
-  assert(global_container);
-
   CREATE_64_BIT_MAPS
 
   level_5_map[level_5_addr].global_container_weakref = global_container;
