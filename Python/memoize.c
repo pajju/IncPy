@@ -478,25 +478,16 @@ void pg_obj_dealloc(PyObject* obj) {
 
 #define CREATE_32_BIT_MAPS \
   UInt16 level_1_addr = (((UInt32)obj) >> 16) & METADATA_MAP_MASK; \
-  UInt8 level_2_addr  = (((UInt32)obj) >> 8) & SMALL_METADATA_MAP_MASK; \
-  UInt8 level_3_addr  = ((UInt32)obj) & SMALL_METADATA_MAP_MASK; \
+  UInt16 level_2_addr = ((UInt32)obj) & METADATA_MAP_MASK; \
  \
-  obj_metadata** level_2_map = level_1_map[level_1_addr]; \
+  obj_metadata* level_2_map = level_1_map[level_1_addr]; \
   if (!level_2_map) { \
-    level_2_map = level_1_map[level_1_addr] = PyMem_New(obj_metadata*, SMALL_METADATA_MAP_SIZE); \
-    memset(level_2_map, 0, sizeof(obj_metadata*) * SMALL_METADATA_MAP_SIZE); \
-    /*printf("  NEW level_2_map (size=%d)\n", sizeof(obj_metadata*) * SMALL_METADATA_MAP_SIZE);*/ \
-  } \
- \
-  obj_metadata* level_3_map = level_2_map[level_2_addr]; \
-  if (!level_3_map) { \
-    level_3_map = level_2_map[level_2_addr] = PyMem_New(obj_metadata, SMALL_METADATA_MAP_SIZE); \
-    memset(level_3_map, 0, sizeof(obj_metadata) * SMALL_METADATA_MAP_SIZE); \
-    /*printf("  NEW level_3_map (size=%d)\n", sizeof(obj_metadata) * SMALL_METADATA_MAP_SIZE);*/ \
+    level_2_map = level_1_map[level_1_addr] = PyMem_New(obj_metadata, METADATA_MAP_SIZE); \
+    memset(level_2_map, 0, sizeof(obj_metadata) * METADATA_MAP_SIZE); \
+    /*printf("  NEW level_2_map (size=%d)\n", sizeof(obj_metadata) * METADATA_MAP_SIZE);*/ \
   }
 
-
-obj_metadata*** level_1_map = NULL;
+obj_metadata** level_1_map = NULL;
 
 void set_global_container(PyObject* obj, PyObject* global_container) {
   if (!level_1_map) {
@@ -505,7 +496,7 @@ void set_global_container(PyObject* obj, PyObject* global_container) {
 
   CREATE_32_BIT_MAPS
 
-  level_1_map[level_1_addr][level_2_addr][level_3_addr].global_container_weakref = global_container;
+  level_1_map[level_1_addr][level_2_addr].global_container_weakref = global_container;
 
   // slow sanity check - comment out for speed:
   //assert(get_global_container(obj) == global_container);
@@ -521,13 +512,8 @@ PyObject* get_global_container(PyObject* obj) {
     return NULL;
   }
 
-  UInt8 level_2_addr  = (((UInt32)obj) >> 8) & SMALL_METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr]) {
-    return NULL;
-  }
-
-  UInt8 level_3_addr  = ((UInt32)obj) & SMALL_METADATA_MAP_MASK;
-  return level_1_map[level_1_addr][level_2_addr][level_3_addr].global_container_weakref;
+  UInt16 level_2_addr  = ((UInt32)obj) & METADATA_MAP_MASK;
+  return level_1_map[level_1_addr][level_2_addr].global_container_weakref;
 }
 
 void set_creation_time(PyObject* obj, unsigned int creation_time) {
@@ -542,7 +528,7 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
 
   CREATE_32_BIT_MAPS
 
-  level_1_map[level_1_addr][level_2_addr][level_3_addr].creation_time = creation_time;
+  level_1_map[level_1_addr][level_2_addr].creation_time = creation_time;
 
   // slow sanity check - comment out for speed:
   //assert(get_creation_time(obj) == creation_time);
@@ -559,13 +545,8 @@ unsigned int get_creation_time(PyObject* obj) {
     return NULL;
   }
 
-  UInt8 level_2_addr  = (((UInt32)obj) >> 8) & SMALL_METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr]) {
-    return NULL;
-  }
-
-  UInt8 level_3_addr  = ((UInt32)obj) & SMALL_METADATA_MAP_MASK;
-  return level_1_map[level_1_addr][level_2_addr][level_3_addr].creation_time;
+  UInt16 level_2_addr  = ((UInt32)obj) & METADATA_MAP_MASK;
+  return level_1_map[level_1_addr][level_2_addr].creation_time;
 }
 
 void pg_obj_dealloc(PyObject* obj) {
@@ -1106,7 +1087,7 @@ void pg_initialize() {
     Py_Exit(1);
   }
 
-  level_1_map = PyMem_New(obj_metadata**, METADATA_MAP_SIZE);
+  level_1_map = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
   memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
 #endif
 
