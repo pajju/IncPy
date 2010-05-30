@@ -366,6 +366,7 @@ PyObject* get_global_container(PyObject* obj) {
   }
 }
 
+// this is called A LOT, once for every allocated object ...
 void set_creation_time(PyObject* obj, unsigned int creation_time) {
   // fast-path ... don't do anything when creation_time is 0!
   if (creation_time == 0) {
