@@ -553,6 +553,9 @@ void pg_dealloc_obj(PyObject* obj) {
   // don't worry about deallocating entry (since it will probably be
   // re-allocated soon anyways for another object, but DO NULL OUT
   // global_container_weakref (required for correctness)
+  //
+  // this takes up more memory but is FASTER than deallocating entries
+  // from pyobj_metadata_map
   if (existing_entry) {
     existing_entry->global_container_weakref = NULL;
   }

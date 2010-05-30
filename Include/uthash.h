@@ -67,8 +67,9 @@ typedef unsigned int uint32_t;
 #define UTHASH_VERSION 1.9.1
 
 #define uthash_fatal(msg) exit(-1)        /* fatal error (out of memory,etc) */
-#define uthash_malloc(sz) malloc(sz)      /* malloc fcn                      */
-#define uthash_free(ptr) free(ptr)        /* free fcn                        */
+// pgbovine - use Python versions of malloc/free ...
+#define uthash_malloc(sz) PyMem_MALLOC(sz)      /* malloc fcn                      */
+#define uthash_free(ptr) PyMem_FREE(ptr)        /* free fcn                        */
 
 #define uthash_noexpand_fyi(tbl)          /* can be defined to log noexpand  */
 #define uthash_expand_fyi(tbl)            /* can be defined to log expands   */
@@ -316,8 +317,9 @@ do {                                                                            
 #define HASH_EMIT_KEY(hh,head,keyptr,fieldlen)                    
 #endif
 
-// pgbovine - try out some different hash functions
-#define HASH_FUNCTION HASH_PGBOVINE
+// pgbovine - try out some different hash functions (HASH_FNV seems to
+// work pretty well on pointer keys)
+#define HASH_FUNCTION HASH_FNV
 
 /* default to Jenkin's hash unless overridden e.g. DHASH_FUNCTION=HASH_SAX */
 #ifdef HASH_FUNCTION 
@@ -335,15 +337,6 @@ do {                                                                            
   while (_hb_keylen--)  { (hashv) = ((hashv) * 33) + *_hb_key++; }               \
   bkt = (hashv) & (num_bkts-1);                                                  \
 } while (0)
-
-/* pgbovine - custom hash function for pointers */
-#define HASH_PGBOVINE(key,keylen,num_bkts,hashv,bkt)                             \
-do {                                                                             \
-  hashv = ((unsigned int)key) >> (sizeof(void*) - 1);                            \
-  bkt = (hashv) & (num_bkts-1);                                                  \
-} while (0)
-
-
 
 /* SAX/FNV/OAT/JEN hash functions are macro variants of those listed at 
  * http://eternallyconfuzzled.com/tuts/algorithms/jsw_tut_hashing.aspx */
