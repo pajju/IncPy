@@ -97,75 +97,11 @@ PyObject* pg_create_canonical_code_name(PyCodeObject* co);
 
 PyObject* canonical_name_to_filename(PyObject* func_name);
 
-/* check for word size
-
-   stolen from Valgrind: valgrind-3.5.0/VEX/pub/libvex_basictypes.h */
-
-/* The following 4 work OK for Linux. */
-#if defined(__x86_64__)
-#   define HOST_WORDSIZE 8
-#elif defined(__i386__)
-#   define HOST_WORDSIZE 4
-#elif defined(__powerpc__) && defined(__powerpc64__)
-#   define HOST_WORDSIZE 8
-#elif defined(__powerpc__) && !defined(__powerpc64__)
-#   define HOST_WORDSIZE 4
-
-#elif defined(_AIX) && !defined(__64BIT__)
-#   define HOST_WORDSIZE 4
-#elif defined(_AIX) && defined(__64BIT__)
-#   define HOST_WORDSIZE 8
-
-#else
-#   error "IncPy compilation error: Can't establish the host architecture"
-#endif
-
-#if HOST_WORDSIZE == 8
-#   define HOST_IS_64BIT
-#endif
-
 // check their sizes in pg_initialize():
 typedef unsigned short          UInt16;
 typedef unsigned int            UInt32;
 typedef unsigned long long int  UInt64;
 
-#define METADATA_MAP_SIZE 65536 // 16 bits
-#define METADATA_MAP_MASK (METADATA_MAP_SIZE-1)
-
-/* efficient multi-level mapping of PyObject addresses to metadata
-   (inspired by Valgrind Memcheck's multi-level shadow memory
-    implementation: http://valgrind.org/docs/shadow-memory2007.pdf)
-
-   We do this 'shadowing' rather than directly augmenting the PyObject
-   struct so that we can maintain BINARY COMPATIBILITY with existing
-   libraries containing compiled extension code (e.g., numpy, scipy).
-   Pre-compiled versions of these libraries are hard-coded with the
-   default PyObject struct layout, so if we change PyObject by adding
-   fields to it, then we will need to re-compile those libraries,
-   which is a big pain! */
-typedef struct {
-  unsigned int creation_time; // measured in number of elapsed function calls
-  /* WEAK REFERENCE - This should only be set for MUTABLE values
-     (see update_global_container_weakref() for more details on why)
-
-     since this is a weak reference, make sure that there's at least
-     ONE other reference to this object, so that it doesn't get
-     garbage collected */
-  PyObject* global_container_weakref;
-} obj_metadata;
-
-// allocate and zero out in pg_initialize():
-#ifdef HOST_IS_64BIT
-// 64-bit architecture
-
-// lazy-initialize each to an array of METADATA_MAP_SIZE
-obj_metadata**** level_1_map;
-
-#else
-// 32-bit architecture
-
-// lazy-initialize to an array of METADATA_MAP_SIZE:
-#endif
 
 #include "uthash.h" // for hash table
 
@@ -183,7 +119,6 @@ typedef struct {
 
   UT_hash_handle hh; // make it viable for insertion into a uthash hash table
 } pyobj_metadata;
-
 
 
 void set_global_container(PyObject* obj, PyObject* global_container);
