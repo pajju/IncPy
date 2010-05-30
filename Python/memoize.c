@@ -496,7 +496,7 @@ void set_global_container(PyObject* obj, PyObject* global_container) {
 
   CREATE_32_BIT_MAPS
 
-  level_1_map[level_1_addr][level_2_addr].global_container_weakref = global_container;
+  level_2_map[level_2_addr].global_container_weakref = global_container;
 
   // slow sanity check - comment out for speed:
   //assert(get_global_container(obj) == global_container);
@@ -528,7 +528,7 @@ void set_creation_time(PyObject* obj, unsigned int creation_time) {
 
   CREATE_32_BIT_MAPS
 
-  level_1_map[level_1_addr][level_2_addr].creation_time = creation_time;
+  level_2_map[level_2_addr].creation_time = creation_time;
 
   // slow sanity check - comment out for speed:
   //assert(get_creation_time(obj) == creation_time);
@@ -542,7 +542,7 @@ unsigned int get_creation_time(PyObject* obj) {
 
   UInt16 level_1_addr = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
   if (!level_1_map[level_1_addr]) {
-    return NULL;
+    return 0;
   }
 
   UInt16 level_2_addr  = ((UInt32)obj) & METADATA_MAP_MASK;
