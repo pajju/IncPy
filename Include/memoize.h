@@ -131,11 +131,6 @@ typedef unsigned int            UInt32;
 typedef unsigned long long int  UInt64;
 
 
-// uncomment to use shadow hash table, which slows down running time but
-// DRASTICALLY reduces memory usage:
-#define USE_SHADOW_HASHTABLE
-
-
 /* Maintain shadow metadata for each object.  We do this 'shadowing'
    rather than DIRECTLY augmenting the PyObject struct so that we can
    maintain BINARY COMPATIBILITY with existing libraries containing
@@ -143,31 +138,6 @@ typedef unsigned long long int  UInt64;
    of these libraries are hard-coded with the default PyObject struct
    layout, so if we change PyObject by adding fields to it, then we will
    need to re-compile those libraries, which is a big pain! */
-
-#ifdef USE_SHADOW_HASHTABLE
-
-// a hash table uses less memory but runs slower ...
-
-#include "uthash.h" // for hash table
-
-typedef struct {
-  void* obj_key; // WEAK REFERENCE - the key for the hash table entry
-
-  unsigned int creation_time; // measured in number of elapsed function calls
-  /* WEAK REFERENCE - This should only be set for MUTABLE values
-     (see update_global_container_weakref() for more details on why)
-
-     since this is a weak reference, make sure that there's at least
-     ONE other reference to this object, so that it doesn't get
-     garbage collected */
-  PyObject* global_container_weakref;
-
-  UT_hash_handle hh; // make it viable for insertion into a uthash hash table
-} pyobj_metadata;
-
-#else // !USE_SHADOW_HASHTABLE
-
-// a multi-level map uses MUCH MORE memory than a hash table but runs faster
 
 /* efficient multi-level mapping of PyObject addresses to metadata
    (inspired by Valgrind Memcheck's multi-level shadow memory
@@ -221,8 +191,6 @@ level_2_map - lazy-allocate to 65536 obj_metadata elements, address with obj[15:
 
 */
 #endif // HOST_IS_64BIT
-
-#endif // USE_SHADOW_HASHTABLE
 
 void set_global_container(PyObject* obj, PyObject* global_container);
 PyObject* get_global_container(PyObject* obj);

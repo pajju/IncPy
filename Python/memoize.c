@@ -329,85 +329,6 @@ static Trie* definitely_impure_funcs = NULL;
 static void init_self_mutator_c_methods(void);
 static void init_definitely_impure_funcs(void);
 
-#ifdef USE_SHADOW_HASHTABLE
-
-// hash table mapping each object to its corresponding pyobj_metadata struct
-pyobj_metadata* pyobj_metadata_map = NULL;
-
-void set_global_container(PyObject* obj, PyObject* global_container) {
-  void* key = (void*)obj;
-  pyobj_metadata* existing_entry = NULL;
-  HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
-
-  if (existing_entry) {
-    existing_entry->global_container_weakref = global_container;
-  }
-  else {
-    pyobj_metadata* new_entry = PyMem_New(pyobj_metadata, 1);
-    new_entry->obj_key = key;
-    new_entry->creation_time = 0;
-    new_entry->global_container_weakref = global_container;
-    HASH_ADD_PTR(pyobj_metadata_map, obj_key, new_entry);
-  }
-
-  // slow sanity check:
-  //assert(get_global_container(obj) == global_container);
-}
-
-PyObject* get_global_container(PyObject* obj) {
-  void* key = (void*)obj;
-  pyobj_metadata* existing_entry = NULL;
-  HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
-
-  if (existing_entry) {
-    return existing_entry->global_container_weakref;
-  }
-  else {
-    return NULL;
-  }
-}
-
-// this is called A LOT, once for every allocated object ...
-void set_creation_time(PyObject* obj, unsigned int creation_time) {
-  // fast-path ... don't do anything when creation_time is 0!
-  if (creation_time == 0) {
-    return;
-  }
-
-  void* key = (void*)obj;
-  pyobj_metadata* existing_entry = NULL;
-  HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
-
-  if (existing_entry) {
-    existing_entry->creation_time = creation_time;
-  }
-  else {
-    pyobj_metadata* new_entry = PyMem_New(pyobj_metadata, 1);
-    new_entry->obj_key = key;
-    new_entry->creation_time = creation_time;
-    new_entry->global_container_weakref = NULL;
-    HASH_ADD_PTR(pyobj_metadata_map, obj_key, new_entry);
-  }
-
-  // slow sanity check:
-  //assert(get_creation_time(obj) == creation_time);
-}
-
-// return 0 if not found (earliest possible creation time)
-unsigned int get_creation_time(PyObject* obj) {
-  void* key = (void*)obj;
-  pyobj_metadata* existing_entry = NULL;
-  HASH_FIND_PTR(pyobj_metadata_map, &key, existing_entry);
-
-  if (existing_entry) {
-    return existing_entry->creation_time;
-  }
-  else {
-    return 0;
-  }
-}
-
-#else // !USE_SHADOW_HASHTABLE
 
 // efficient multi-level mapping of PyObject addresses to metadata
 #ifdef HOST_IS_64BIT
@@ -623,8 +544,6 @@ unsigned int get_creation_time(PyObject* obj) {
 }
 
 #endif // HOST_IS_64BIT
-
-#endif // USE_SHADOW_HASHTABLE
 
 
 void pg_obj_dealloc(PyObject* obj) {
@@ -1154,8 +1073,6 @@ void pg_initialize() {
     Py_Exit(1);
   }
 
-#ifndef USE_SHADOW_HASHTABLE
-
 // initialize and zero out level 1 mappings:
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
@@ -1176,8 +1093,6 @@ void pg_initialize() {
   level_1_map = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
   memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
 #endif
-
-#endif // USE_SHADOW_HASHTABLE
 
 
 #ifdef ENABLE_DEBUG_LOGGING // defined in "memoize_logging.h"
@@ -1397,12 +1312,6 @@ void pg_initialize() {
                   memoize_time_limit_ms / 1000,
                   PyString_AsString(tmp_str));
   Py_DECREF(tmp_str);
-
-#ifdef USE_SHADOW_HASHTABLE
-  USER_LOG_PRINTF(" | SHADOW_HASH_TABLE");
-#else // !USE_SHADOW_HASHTABLE
-  USER_LOG_PRINTF(" | SHADOW_MULTI_LEVEL_MAP");
-#endif // USE_SHADOW_HASHTABLE
 
   if (trust_prev_memoized_results) {
     USER_LOG_PRINTF(" | TRUST_PREV_RESULTS\n");
