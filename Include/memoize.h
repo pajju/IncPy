@@ -195,9 +195,6 @@ level_2_map - lazy-allocate to 65536 obj_metadata elements, address with obj[15:
 void set_global_container(PyObject* obj, PyObject* global_container);
 PyObject* get_global_container(PyObject* obj);
 
-void set_creation_time(PyObject* obj, unsigned int creation_time);
-unsigned int get_creation_time(PyObject* obj);
-
 
 #ifdef __cplusplus
 }

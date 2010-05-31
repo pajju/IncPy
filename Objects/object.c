@@ -2181,15 +2181,10 @@ _Py_ReadyTypes(void)
 
 #ifdef Py_TRACE_REFS
 
-extern unsigned int num_executed_func_calls; // pgbovine
-
 void
 _Py_NewReference(PyObject *op)
 {
 	_Py_INC_REFTOTAL;
-  // pgbovine - don't forget to also do set_creation_time in
-  // _Py_NewReference macro in Include/object.h
-	set_creation_time(op, num_executed_func_calls); // pgbovine
 	op->ob_refcnt = 1;
 	_Py_AddToAllObjects(op, 1);
 	_Py_INC_TPALLOCS(op);

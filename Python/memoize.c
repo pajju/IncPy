@@ -418,55 +418,6 @@ PyObject* get_global_container(PyObject* obj) {
   return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr][level_5_addr].global_container_weakref;
 }
 
-void set_creation_time(PyObject* obj, unsigned int creation_time) {
-  if (!level_1_map) {
-    return;
-  }
-
-  // fast-path ... don't do anything when creation_time is 0!
-  if (creation_time == 0) {
-    return;
-  }
-
-  CREATE_64_BIT_MAPS
-
-  level_5_map[level_5_addr].creation_time = creation_time;
-
-  // slow sanity check - comment out for speed:
-  //assert(get_creation_time(obj) == creation_time);
-}
-
-// return 0 if not found (earliest possible creation time)
-unsigned int get_creation_time(PyObject* obj) {
-  if (!level_1_map) {
-    return 0;
-  }
-
-  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr]) {
-    return 0;
-  }
-
-  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr]) {
-    return 0;
-  }
-
-  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
-    return 0;
-  }
-
-  UInt8 level_4_addr = (((UInt64)obj) >> 8) & SMALL_METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr]) {
-    return 0;
-  }
-
-  UInt8 level_5_addr = ((UInt64)obj) & SMALL_METADATA_MAP_MASK;
-
-  return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr][level_5_addr].creation_time;
-}
-
 #else
 // 32-bit architecture
 
@@ -508,39 +459,6 @@ PyObject* get_global_container(PyObject* obj) {
 
   UInt16 level_2_addr  = ((UInt32)obj) & METADATA_MAP_MASK;
   return level_1_map[level_1_addr][level_2_addr].global_container_weakref;
-}
-
-void set_creation_time(PyObject* obj, unsigned int creation_time) {
-  if (!level_1_map) {
-    return;
-  }
-
-  // fast-path ... don't do anything when creation_time is 0!
-  if (creation_time == 0) {
-    return;
-  }
-
-  CREATE_32_BIT_MAPS
-
-  level_2_map[level_2_addr].creation_time = creation_time;
-
-  // slow sanity check - comment out for speed:
-  //assert(get_creation_time(obj) == creation_time);
-}
-
-// return 0 if not found (earliest possible creation time)
-unsigned int get_creation_time(PyObject* obj) {
-  if (!level_1_map) {
-    return 0;
-  }
-
-  UInt16 level_1_addr = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr]) {
-    return 0;
-  }
-
-  UInt16 level_2_addr  = ((UInt32)obj) & METADATA_MAP_MASK;
-  return level_1_map[level_1_addr][level_2_addr].creation_time;
 }
 
 #endif // HOST_IS_64BIT
