@@ -20,6 +20,9 @@ extern "C" {
 
 // ORDER MATTERS for short-circuiting ... put the most commonly-occuring
 // ones first ...
+//
+// kinda gross that we have to hard-code the NumPy basic data types,
+// hmmm ... http://docs.scipy.org/doc/numpy/user/basics.types.html
 #define DEFINITELY_IMMUTABLE(obj) \
   ((obj == Py_None) ||            \
    PyString_CheckExact(obj) ||    \
@@ -34,7 +37,13 @@ extern "C" {
    PyMethod_Check(obj) ||         \
    PyType_CheckExact(obj) ||      \
    PyClass_Check(obj) ||          \
-   PyFile_CheckExact(obj))
+   PyFile_CheckExact(obj) || \
+   (strcmp(Py_TYPE(obj)->tp_name,  "numpy.bool") == 0) || \
+   (strncmp(Py_TYPE(obj)->tp_name, "numpy.int", 9) == 0) || \
+   (strncmp(Py_TYPE(obj)->tp_name, "numpy.uint", 10) == 0) || \
+   (strncmp(Py_TYPE(obj)->tp_name, "numpy.float", 11) == 0) || \
+   (strncmp(Py_TYPE(obj)->tp_name, "numpy.complex", 13) == 0) \
+  )
 
 
 PyObject* find_globally_reachable_obj_by_name(PyObject* varname_tuple,
