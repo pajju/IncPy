@@ -737,6 +737,8 @@ PyAPI_FUNC(void) _Py_AddToAllObjects(PyObject *, int force);
 #define _Py_ForgetReference(op) _Py_INC_TPFREES(op)
 
 // pgbovine - call pg_obj_dealloc to pick up deallocations
+void pg_obj_dealloc(PyObject* obj);
+
 #define _Py_Dealloc(op) (				\
 	_Py_INC_TPFREES(op) _Py_COUNT_ALLOCS_COMMA	\
 	(*Py_TYPE(op)->tp_dealloc)((PyObject *)(op)) , \
