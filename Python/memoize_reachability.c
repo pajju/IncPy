@@ -287,10 +287,10 @@ int contains_externally_aliased_mutable_obj(PyObject* obj, PyFrameObject* f) {
     }
 
     // if it's reachable from an argument to a function currently on the
-    // stack ABOVE f, then return 1
+    // stack, then return 1
     unsigned int arg_reachable_func_start_time = get_arg_reachable_func_start_time(obj);
     if (arg_reachable_func_start_time > 0) {
-      PyFrameObject* cur_frame = f->f_back;
+      PyFrameObject* cur_frame = f;
       while (cur_frame) {
         if (arg_reachable_func_start_time == cur_frame->start_func_call_time) {
           return 1;
