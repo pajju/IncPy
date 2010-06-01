@@ -23,6 +23,7 @@ extern "C" {
 //
 // kinda gross that we have to hard-code the NumPy basic data types,
 // hmmm ... http://docs.scipy.org/doc/numpy/user/basics.types.html
+// (try to speed up by short-circuiting with a 'numpy' prefix check)
 #define DEFINITELY_IMMUTABLE(obj) \
   ((obj == Py_None) ||            \
    PyString_CheckExact(obj) ||    \
@@ -38,11 +39,12 @@ extern "C" {
    PyType_CheckExact(obj) ||      \
    PyClass_Check(obj) ||          \
    PyFile_CheckExact(obj) || \
-   (strcmp(Py_TYPE(obj)->tp_name,  "numpy.bool") == 0) || \
-   (strncmp(Py_TYPE(obj)->tp_name, "numpy.int", 9) == 0) || \
-   (strncmp(Py_TYPE(obj)->tp_name, "numpy.uint", 10) == 0) || \
-   (strncmp(Py_TYPE(obj)->tp_name, "numpy.float", 11) == 0) || \
-   (strncmp(Py_TYPE(obj)->tp_name, "numpy.complex", 13) == 0) \
+   ((strncmp(Py_TYPE(obj)->tp_name, "numpy", 5) == 0) && \
+    ((strcmp(Py_TYPE(obj)->tp_name,  "numpy.bool") == 0) || \
+     (strncmp(Py_TYPE(obj)->tp_name, "numpy.int", 9) == 0) || \
+     (strncmp(Py_TYPE(obj)->tp_name, "numpy.uint", 10) == 0) || \
+     (strncmp(Py_TYPE(obj)->tp_name, "numpy.float", 11) == 0) || \
+     (strncmp(Py_TYPE(obj)->tp_name, "numpy.complex", 13) == 0))) \
   )
 
 
