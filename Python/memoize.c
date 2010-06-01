@@ -446,7 +446,7 @@ unsigned int get_arg_reachable_func_start_time(PyObject* obj) {
   }
 
   UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
-  if(!level_1_map[level_1_addr][level_2_addr]) {
+  if (!level_1_map[level_1_addr][level_2_addr]) {
     return 0;
   }
 
