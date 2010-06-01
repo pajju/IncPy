@@ -418,6 +418,91 @@ PyObject* get_global_container(PyObject* obj) {
   return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr][level_5_addr].global_container_weakref;
 }
 
+void set_arg_reachable_func_start_time(PyObject* obj, unsigned int start_func_call_time) {
+  if (start_func_call_time == 0) {
+    return;
+  }
+
+  if (!level_1_map) {
+    return;
+  }
+
+  CREATE_64_BIT_MAPS
+
+  level_5_map[level_5_addr].arg_reachable_func_start_time = start_func_call_time;
+
+  // slow sanity check - comment out for speed:
+  //assert(get_arg_reachable_func_start_time(obj) == start_func_call_time);
+}
+
+unsigned int get_arg_reachable_func_start_time(PyObject* obj) {
+  if (!level_1_map) {
+    return 0;
+  }
+
+  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr]) {
+    return 0;
+  }
+
+  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
+  if(!level_1_map[level_1_addr][level_2_addr]) {
+    return 0;
+  }
+
+  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
+    return 0;
+  }
+
+  UInt8 level_4_addr = (((UInt64)obj) >> 8) & SMALL_METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr]) {
+    return 0;
+  }
+
+  UInt8 level_5_addr = ((UInt64)obj) & SMALL_METADATA_MAP_MASK;
+
+  return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr][level_5_addr].arg_reachable_func_start_time;
+}
+
+
+void pg_obj_dealloc(PyObject* obj) {
+  /* for correctness, we must null out this entry when the object is
+     deallocated, so that a future object allocated at the same address
+     won't have stale data */
+  if (!level_1_map) {
+    return;
+  }
+
+  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr]) {
+    return;
+  }
+
+  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
+  if(!level_1_map[level_1_addr][level_2_addr]) {
+    return;
+  }
+
+  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
+    return;
+  }
+
+  UInt8 level_4_addr = (((UInt64)obj) >> 8) & SMALL_METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr]) {
+    return;
+  }
+
+  UInt8 level_5_addr = ((UInt64)obj) & SMALL_METADATA_MAP_MASK;
+
+  obj_metadata* cur_entry =
+    &level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr][level_5_addr];
+
+  memset(cur_entry, 0, sizeof(*cur_entry));
+}
+
+
 #else
 // 32-bit architecture
 
@@ -461,19 +546,56 @@ PyObject* get_global_container(PyObject* obj) {
   return level_1_map[level_1_addr][level_2_addr].global_container_weakref;
 }
 
-#endif // HOST_IS_64BIT
+void set_arg_reachable_func_start_time(PyObject* obj, unsigned int start_func_call_time) {
+  if (start_func_call_time == 0) {
+    return;
+  }
 
+  if (!level_1_map) {
+    return;
+  }
+
+  CREATE_32_BIT_MAPS
+
+  level_2_map[level_2_addr].arg_reachable_func_start_time = start_func_call_time;
+
+  // slow sanity check - comment out for speed:
+  //assert(get_arg_reachable_func_start_time(obj) == start_func_call_time);
+}
+
+unsigned int get_arg_reachable_func_start_time(PyObject* obj) {
+  if (!level_1_map) {
+    return 0;
+  }
+
+  UInt16 level_1_addr = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr]) {
+    return 0;
+  }
+
+  UInt16 level_2_addr  = ((UInt32)obj) & METADATA_MAP_MASK;
+  return level_1_map[level_1_addr][level_2_addr].arg_reachable_func_start_time;
+}
 
 void pg_obj_dealloc(PyObject* obj) {
-  /* for correctness, we must null out global_container_weakref when the
-     object is deallocated, so that a future object allocated at the
-     same address won't have this stale global_container_weakref (we
-     don't need to null out creation_time, since it will be updated when
-     a new object is created at the same address as obj) */
-  if (get_global_container(obj)) {
-    set_global_container(obj, NULL);
+  if (!level_1_map) {
+    return;
   }
+
+  UInt16 level_1_addr = (((UInt32)obj) >> 16) & METADATA_MAP_MASK;
+  if (!level_1_map[level_1_addr]) {
+    return;
+  }
+
+  UInt16 level_2_addr  = ((UInt32)obj) & METADATA_MAP_MASK;
+
+  obj_metadata* cur_entry = &level_1_map[level_1_addr][level_2_addr];
+
+  memset(cur_entry, 0, sizeof(*cur_entry));
 }
+
+
+#endif // HOST_IS_64BIT
 
 
 /* proxy objects - for objects that can't be pickled, we can instead
@@ -1922,6 +2044,32 @@ pg_enter_frame_done:
     PyObject* elt = f->f_localsplus[i];
     PyList_SET_ITEM(f->stored_args_lst, i, elt);
     Py_INCREF(elt);
+
+    unsigned int arg_reachable_func_start_time = get_arg_reachable_func_start_time(elt);
+
+    // always update if it hasn't been set yet:
+    if (arg_reachable_func_start_time == 0) {
+      set_arg_reachable_func_start_time(elt, f->start_func_call_time);
+    }
+    else {
+      /* subtle ... if arg_reachable_func_start_time of elt is equal to
+         the start time of any function currently on the stack, then do
+         NOT update it, since we want it set to the value of the
+         outer-most function */
+      char already_an_arg = 0;
+      PyFrameObject* cur_frame = f->f_back;
+      while (cur_frame) {
+        if (arg_reachable_func_start_time == cur_frame->start_func_call_time) {
+          already_an_arg = 1;
+          break;
+        }
+        cur_frame = cur_frame->f_back;
+      }
+
+      if (!already_an_arg) {
+        set_arg_reachable_func_start_time(elt, f->start_func_call_time);
+      }
+    }
   }
 
 
@@ -2492,6 +2640,9 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value) {
 
   MEMOIZE_PUBLIC_START()
 
+  // propagate arg_reachable_func_start_time field:
+  update_arg_reachable_func_start_time(object, value);
+
   PyObject* global_container = get_global_container(object);
   if (global_container) {
     // If object is a MODULE, then we need to add a more detailed
@@ -2541,6 +2692,9 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
 
 
   MEMOIZE_PUBLIC_START()
+
+  // propagate arg_reachable_func_start_time field:
+  update_arg_reachable_func_start_time(obj, res);
 
   // extend global reachability to res
   PyObject* global_container = get_global_container(obj);
@@ -2597,27 +2751,23 @@ void pg_about_to_MUTATE_event(PyObject *object) {
     mark_entire_stack_impure("mutate global");
   }
   else {
-    // then fall back on the more general check, which picks up
-    // mutations of function arguments as well:
-
-    // mark each frame as impure if it was called AFTER the object was
-    // created (this operationalizes our chosen definition of impurity)
+    // then check for reachability from function arguments:
     PyFrameObject* f = top_frame;
-    while (f) {
-      if (f->func_memo_info) {
-        if (get_creation_time(object) < f->start_func_call_time) {
-          mark_impure(f, "mutate non-local value");
+
+    unsigned int arg_reachable_func_start_time = get_arg_reachable_func_start_time(object);
+    if (arg_reachable_func_start_time > 0) { // if it's 0, then it's not arg reachable
+      while (f) {
+        if (f->func_memo_info) {
+          // this condition is essential for picking up arguments that
+          // are 'threaded through' several functions (e.g., foo(x)
+          // calls bar(x) calls baz(x))
+          // (see IncPy-regression-tests/impure_arg_3 test)
+          if (arg_reachable_func_start_time <= f->start_func_call_time) {
+            mark_impure(f, "mutate non-local value");
+          }
         }
-        else {
-          // small optimization: since we are going 'backwards' up the
-          // stack, the start_instr_time should be strictly decreasing
-          // (for all frames with a func_memo_info), so once we get smaller
-          // than get_creation_time(object), we can break out of the loop
-          // and not check any more frames
-          break;
-        }
+        f = f->f_back;
       }
-      f = f->f_back;
     }
   }
 

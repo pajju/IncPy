@@ -243,6 +243,23 @@ void update_global_container_weakref(PyObject* obj, PyObject* new_elt) {
   }
 }
 
+// if child is MUTABLE, propagate the parent's arg_reachable_func_start_time to child
+void update_arg_reachable_func_start_time(PyObject* parent, PyObject* child) {
+  // VERY IMPORTANT but subtle point - immutable values might be
+  // interned by the Python interpreter implementation (e.g., small
+  // integers are interned), so we don't want to taint them by adding
+  // a global_container_weakref
+  if (DEFINITELY_IMMUTABLE(child)) {
+    return;
+  }
+
+  unsigned int parent_start_time = get_arg_reachable_func_start_time(parent);
+
+  if (parent_start_time) {
+    set_arg_reachable_func_start_time(child, parent_start_time);
+  }
+}
+
 
 // returns 1 iff obj contains within it a MUTABLE object that
 // existed before the invocation of frame f, 0 otherwise
@@ -263,9 +280,23 @@ int contains_externally_aliased_mutable_obj(PyObject* obj, PyFrameObject* f) {
   // so those are actually created BEFORE a function is called but
   // are harmless since they can't contain mutable items inside.
   if (!PyTuple_CheckExact(obj)) {
-    // only do the time check on MUTABLE items
-    if (get_creation_time(obj) < f->start_func_call_time) {
+
+    // if it's globally-reachable, then return 1
+    if (get_global_container(obj)) {
       return 1;
+    }
+
+    // if it's reachable from an argument to a function currently on the
+    // stack ABOVE f, then return 1
+    unsigned int arg_reachable_func_start_time = get_arg_reachable_func_start_time(obj);
+    if (arg_reachable_func_start_time > 0) {
+      PyFrameObject* cur_frame = f->f_back;
+      while (cur_frame) {
+        if (arg_reachable_func_start_time == cur_frame->start_func_call_time) {
+          return 1;
+        }
+        cur_frame = cur_frame->f_back;
+      }
     }
   }
 

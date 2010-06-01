@@ -151,7 +151,6 @@ typedef unsigned long long int  UInt64;
 
 
 typedef struct {
-  unsigned int creation_time; // measured in number of elapsed function calls
   /* WEAK REFERENCE - This should only be set for MUTABLE values
      (see update_global_container_weakref() for more details on why)
 
@@ -159,6 +158,20 @@ typedef struct {
      ONE other reference to this object, so that it doesn't get
      garbage collected */
   PyObject* global_container_weakref;
+
+  /* if this object is MUTABLE and reachable from an argument of a
+     function invocation, then set this value to the
+     start_func_call_time field of the function's PyFrameObject
+     (measured in units of num_executed_func_calls).
+
+     subtle: if it's reachable from an argument of MORE THAN one
+     function on the stack, then set this value to the
+     start_func_call_time of the outer-most function on the stack ...
+     e.g., if foo(x) calls bar(x), then the
+     arg_reachable_func_start_time for x should be set to the
+     start_func_call_time of foo, NOT bar, since foo is farther
+     'outwards' than bar */
+  unsigned int arg_reachable_func_start_time;
 } obj_metadata;
 
 #ifdef HOST_IS_64BIT
@@ -194,6 +207,9 @@ level_2_map - lazy-allocate to 65536 obj_metadata elements, address with obj[15:
 
 void set_global_container(PyObject* obj, PyObject* global_container);
 PyObject* get_global_container(PyObject* obj);
+
+void set_arg_reachable_func_start_time(PyObject* obj, unsigned int start_func_call_time);
+unsigned int get_arg_reachable_func_start_time(PyObject* obj);
 
 
 #ifdef __cplusplus
