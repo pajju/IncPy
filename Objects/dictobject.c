@@ -1145,6 +1145,8 @@ dict_keys(register PyDictObject *mp)
 		}
 	}
 	assert(j == n);
+
+  pg_extend_reachability_event((PyObject*)mp, v); // pgbovine
 	return v;
 }
 
@@ -1179,6 +1181,8 @@ dict_values(register PyDictObject *mp)
 		}
 	}
 	assert(j == n);
+
+  pg_extend_reachability_event((PyObject*)mp, v); // pgbovine
 	return v;
 }
 
@@ -1230,6 +1234,8 @@ dict_items(register PyDictObject *mp)
 		}
 	}
 	assert(j == n);
+
+  pg_extend_reachability_event((PyObject*)mp, v); // pgbovine
 	return v;
 }
 
@@ -1844,6 +1850,8 @@ dict_get(register PyDictObject *mp, PyObject *args)
 	if (val == NULL)
 		val = failobj;
 	Py_INCREF(val);
+
+  pg_extend_reachability_event((PyObject*)mp, val); // pgbovine
 	return val;
 }
 
@@ -2415,6 +2423,8 @@ static PyObject *dictiter_iternextkey(dictiterobject *di)
 	di->len--;
 	key = ep[i].me_key;
 	Py_INCREF(key);
+
+  pg_extend_reachability_event((PyObject*)d, key); // pgbovine
 	return key;
 
 fail:
@@ -2487,6 +2497,8 @@ static PyObject *dictiter_iternextvalue(dictiterobject *di)
 	di->di_pos = i+1;
 	di->len--;
 	Py_INCREF(value);
+
+  pg_extend_reachability_event((PyObject*)d, value); // pgbovine
 	return value;
 
 fail:
@@ -2573,6 +2585,8 @@ static PyObject *dictiter_iternextitem(dictiterobject *di)
 	Py_INCREF(value);
 	PyTuple_SET_ITEM(result, 0, key);
 	PyTuple_SET_ITEM(result, 1, value);
+
+  pg_extend_reachability_event((PyObject*)d, result); // pgbovine
 	return result;
 
 fail:
