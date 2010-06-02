@@ -1860,6 +1860,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				while (oparg--) {
 					w = items[oparg];
 					Py_INCREF(w);
+          pg_extend_reachability_event(v, w); // pgbovine
 					PUSH(w);
 				}
 				Py_DECREF(v);
@@ -1871,6 +1872,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 				while (oparg--) {
 					w = items[oparg];
 					Py_INCREF(w);
+          pg_extend_reachability_event(v, w); // pgbovine
 					PUSH(w);
 				}
 			} else if (unpack_iterable(v, oparg,
@@ -3361,6 +3363,7 @@ unpack_iterable(PyObject *v, int argcnt, PyObject **sp)
 			}
 			goto Error;
 		}
+    pg_extend_reachability_event(v, w); // pgbovine
 		*--sp = w;
 	}
 

@@ -921,6 +921,8 @@ tupleiter_next(tupleiterobject *it)
 		item = PyTuple_GET_ITEM(seq, it->it_index);
 		++it->it_index;
 		Py_INCREF(item);
+
+    pg_extend_reachability_event((PyObject*)seq, item); // pgbovine
 		return item;
 	}
 

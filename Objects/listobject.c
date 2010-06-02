@@ -2884,6 +2884,8 @@ listiter_next(listiterobject *it)
 		item = PyList_GET_ITEM(seq, it->it_index);
 		++it->it_index;
 		Py_INCREF(item);
+
+    pg_extend_reachability_event((PyObject*)seq, item); // pgbovine
 		return item;
 	}
 
@@ -2997,6 +2999,8 @@ listreviter_next(listreviterobject *it)
 		item = PyList_GET_ITEM(seq, index);
 		it->it_index--;
 		Py_INCREF(item);
+
+    pg_extend_reachability_event((PyObject*)seq, item); // pgbovine
 		return item;
 	}
 	it->it_index = -1;

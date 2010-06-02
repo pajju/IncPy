@@ -866,6 +866,8 @@ static PyObject *setiter_iternext(setiterobject *si)
 	si->len--;
 	key = entry[i].key;
 	Py_INCREF(key);
+
+  pg_extend_reachability_event((PyObject*)so, key); // pgbovine
 	return key;
 
 fail:
