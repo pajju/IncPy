@@ -1273,7 +1273,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 			  slow_get:
 				x = PyObject_GetItem(v, w);
 
-      pg_BINARY_SUBSCR_event(v, w, x); // pgbovine
+      pg_extend_reachability_event(v, x); // pgbovine
 
 			Py_DECREF(v);
 			Py_DECREF(w);

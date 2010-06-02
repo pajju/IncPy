@@ -2674,19 +2674,21 @@ void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value) {
   MEMOIZE_PUBLIC_END()
 }
 
-// handler for BINARY_SUBSCR opcode: ret = obj[ind]
-void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
-  assert(obj);
 
-  // res could be null if obj[ind] is non-existent
-  if (!res) return;
+// handler for any actions that extend global reachability from parent
+// to child (e.g., child = parent[index])
+void pg_extend_reachability_event(PyObject* parent, PyObject* child) {
+  assert(parent);
+
+  // child could be NULL if look-up fails - e.g., parent[index] is non-existent
+  if (!child) return;
 
   /* Optimization: useless to try to track field accesses of these types: */
-  if (PyType_CheckExact(res) ||
-      PyCFunction_Check(res) ||
-      PyFunction_Check(res) ||
-      PyMethod_Check(res) ||
-      PyClass_Check(res)) {
+  if (PyType_CheckExact(child) ||
+      PyCFunction_Check(child) ||
+      PyFunction_Check(child) ||
+      PyMethod_Check(child) ||
+      PyClass_Check(child)) {
     return;
   }
 
@@ -2694,12 +2696,12 @@ void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res) {
   MEMOIZE_PUBLIC_START()
 
   // propagate arg_reachable_func_start_time field:
-  update_arg_reachable_func_start_time(obj, res);
+  update_arg_reachable_func_start_time(parent, child);
 
   // extend global reachability to res
-  PyObject* global_container = get_global_container(obj);
+  PyObject* global_container = get_global_container(parent);
   if (global_container) {
-    update_global_container_weakref(res, global_container);
+    update_global_container_weakref(child, global_container);
   }
 
   MEMOIZE_PUBLIC_END()

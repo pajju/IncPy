@@ -54,8 +54,10 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval);
 void pg_LOAD_GLOBAL_event(PyObject *varname, PyObject *value);
 // handler for LOAD(object.attrname) --> value
 void pg_GetAttr_event(PyObject *object, PyObject *attrname, PyObject *value);
-// handler for BINARY_SUBSCR opcode: ret = obj[ind]
-void pg_BINARY_SUBSCR_event(PyObject* obj, PyObject* ind, PyObject* res);
+
+// handler for any actions that extend global reachability from parent
+// to child (e.g., child = parent[index])
+void pg_extend_reachability_event(PyObject* parent, PyObject* child);
 
 // handler for STORE_GLOBAL(varname) or DELETE_GLOBA(varname)
 void pg_STORE_DEL_GLOBAL_event(PyObject *varname);
