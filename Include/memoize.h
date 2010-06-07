@@ -174,12 +174,21 @@ typedef struct {
      start_func_call_time of foo, NOT bar, since foo is farther
      'outwards' than bar */
   unsigned int arg_reachable_func_start_time;
+
+  char allocated;
 } obj_metadata;
 
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
 
-obj_metadata***** level_1_map;
+typedef struct {
+  // number of elements in elts with allocated bit set to 1
+  unsigned int num_allocated_elts;
+
+  obj_metadata elts[SMALL_METADATA_MAP_SIZE];
+} obj_metadata_array;
+
+obj_metadata_array**** level_1_map;
 
 /*
 
