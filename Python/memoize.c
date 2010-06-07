@@ -343,35 +343,32 @@ static void init_definitely_impure_funcs(void);
  \
   obj_metadata**** level_2_map = level_1_map[level_1_addr]; \
   if (!level_2_map) { \
-    level_2_map = level_1_map[level_1_addr] = PyMem_New(obj_metadata***, METADATA_MAP_SIZE); \
-    memset(level_2_map, 0, sizeof(obj_metadata***) * METADATA_MAP_SIZE); \
-    /*printf("  NEW level_2_map (size=%d)\n", sizeof(obj_metadata***) * METADATA_MAP_SIZE);*/ \
+    level_2_map = level_1_map[level_1_addr] = PyMem_New(typeof(*level_2_map), METADATA_MAP_SIZE); \
+    memset(level_2_map, 0, sizeof(*level_2_map) * METADATA_MAP_SIZE); \
+    /*printf("  NEW level_2_map (size=%d)\n", sizeof(*level_2_map) * METADATA_MAP_SIZE);*/ \
   } \
  \
   obj_metadata*** level_3_map = level_2_map[level_2_addr]; \
   if (!level_3_map) { \
-    level_3_map = level_2_map[level_2_addr] = PyMem_New(obj_metadata**, METADATA_MAP_SIZE); \
-    memset(level_3_map, 0, sizeof(obj_metadata**) * METADATA_MAP_SIZE); \
-    /*printf("  NEW level_3_map (size=%d)\n", sizeof(obj_metadata**) * METADATA_MAP_SIZE);*/ \
+    level_3_map = level_2_map[level_2_addr] = PyMem_New(typeof(*level_3_map), METADATA_MAP_SIZE); \
+    memset(level_3_map, 0, sizeof(sizeof(*level_3_map)) * METADATA_MAP_SIZE); \
+    /*printf("  NEW level_3_map (size=%d)\n", sizeof(*level_3_map) * METADATA_MAP_SIZE);*/ \
   } \
  \
   obj_metadata** level_4_map = level_3_map[level_3_addr]; \
   if (!level_4_map) { \
-    level_4_map = level_3_map[level_3_addr] = PyMem_New(obj_metadata*, SMALL_METADATA_MAP_SIZE); \
-    memset(level_4_map, 0, sizeof(obj_metadata*) * SMALL_METADATA_MAP_SIZE); \
-    /*printf("  NEW level_4_map (size=%d)\n", sizeof(obj_metadata*) * SMALL_METADATA_MAP_SIZE);*/ \
+    level_4_map = level_3_map[level_3_addr] = PyMem_New(typeof(*level_4_map), SMALL_METADATA_MAP_SIZE); \
+    memset(level_4_map, 0, sizeof(*level_4_map) * SMALL_METADATA_MAP_SIZE); \
+    /*printf("  NEW level_4_map (size=%d)\n", sizeof(*level_4_map) * SMALL_METADATA_MAP_SIZE);*/ \
   } \
  \
   obj_metadata* level_5_map = level_4_map[level_4_addr]; \
   if (!level_5_map) { \
-    level_5_map = level_4_map[level_4_addr] = PyMem_New(obj_metadata, SMALL_METADATA_MAP_SIZE); \
-    memset(level_5_map, 0, sizeof(obj_metadata) * SMALL_METADATA_MAP_SIZE); \
-    /*printf("  NEW level_5_map (size=%d)\n", sizeof(obj_metadata) * SMALL_METADATA_MAP_SIZE);*/ \
+    level_5_map = level_4_map[level_4_addr] = PyMem_New(typeof(*level_5_map), SMALL_METADATA_MAP_SIZE); \
+    memset(level_5_map, 0, sizeof(*level_5_map) * SMALL_METADATA_MAP_SIZE); \
+    /*printf("  NEW level_5_map (size=%d)\n", sizeof(*level_5_map) * SMALL_METADATA_MAP_SIZE);*/ \
   }
 
-
-// ugh, unfortunately the straightforward implementation for 64-bit is
-// much more kludgy and probably slower than the 32-bit implementation
 
 obj_metadata***** level_1_map = NULL;
 
@@ -512,9 +509,9 @@ void pg_obj_dealloc(PyObject* obj) {
  \
   obj_metadata* level_2_map = level_1_map[level_1_addr]; \
   if (!level_2_map) { \
-    level_2_map = level_1_map[level_1_addr] = PyMem_New(obj_metadata, METADATA_MAP_SIZE); \
-    memset(level_2_map, 0, sizeof(obj_metadata) * METADATA_MAP_SIZE); \
-    /*printf("  NEW level_2_map (size=%d)\n", sizeof(obj_metadata) * METADATA_MAP_SIZE);*/ \
+    level_2_map = level_1_map[level_1_addr] = PyMem_New(typeof(*level_2_map), METADATA_MAP_SIZE); \
+    memset(level_2_map, 0, sizeof(*level_2_map) * METADATA_MAP_SIZE); \
+    /*printf("  NEW level_2_map (size=%d)\n", sizeof(*level_2_map) * METADATA_MAP_SIZE);*/ \
   }
 
 obj_metadata** level_1_map = NULL;
@@ -1113,26 +1110,23 @@ void pg_initialize() {
     Py_Exit(1);
   }
 
-// initialize and zero out level 1 mappings:
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
   if (sizeof(void*) != 8) {
     fprintf(stderr, "ERROR: void* isn't 64 bits.\n");
     Py_Exit(1);
   }
-
-  level_1_map = PyMem_New(obj_metadata****, METADATA_MAP_SIZE);
-  memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
 #else
 // 32-bit architecture
   if (sizeof(void*) != 4) {
     fprintf(stderr, "ERROR: void* isn't 32 bits.\n");
     Py_Exit(1);
   }
-
-  level_1_map = PyMem_New(obj_metadata*, METADATA_MAP_SIZE);
-  memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
 #endif
+
+// initialize and zero out level 1 mappings:
+level_1_map = PyMem_New(typeof(*level_1_map), METADATA_MAP_SIZE);
+memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
 
 
 #ifdef ENABLE_DEBUG_LOGGING // defined in "memoize_logging.h"
