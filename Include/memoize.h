@@ -188,15 +188,15 @@ typedef struct {
   obj_metadata elts[SMALL_METADATA_MAP_SIZE];
 } obj_metadata_array;
 
-obj_metadata_array**** level_1_map;
+obj_metadata_array***** level_1_map;
 
 /*
 
-level_1_map - allocate to 65536 obj_metadata**** elements,     address with obj[63:48]
-level_2_map - lazy-allocate to 65536 obj_metadata*** elements, address with obj[47:32]
-level_3_map - lazy-allocate to 65536 obj_metadata** elements,  address with obj[31:16]
-level_4_map - lazy-allocate to 256 obj_metadata* elements,     address with obj[15:8]
-level_5_map - lazy-allocate to 256 obj_metadata elements,      address with obj[7:0]
+level_1_map - allocate to 65536 obj_metadata_array**** elements,     address with obj[63:48]
+level_2_map - lazy-allocate to 65536 obj_metadata_array*** elements, address with obj[47:32]
+level_3_map - lazy-allocate to 65536 obj_metadata_array** elements,  address with obj[31:16]
+level_4_map - lazy-allocate to 256 obj_metadata_array* elements,     address with obj[15:8]
+level_5_map - lazy-allocate to 256 obj_metadata_array elements,      address with obj[7:0]
 
 (we used to have 4 layers, but splitting into 5 layers effectively
 decreased memory usage for large benchmarks, sometimes by 1/3)
