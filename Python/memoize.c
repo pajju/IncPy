@@ -131,6 +131,13 @@ program, not our memoization support code.
 #define ENABLE_COW
 
 
+// Optimization: if a function has been run this many times with
+// no memoized vals (as indicated by the num_calls_with_no_memoized_vals
+// field in its FuncMemoInfo struct), then mark that function as impure
+// and stop tracking it
+#define NO_MEMOIZED_VALS_THRESHOLD 5
+
+
 #ifdef ENABLE_DEBUG_LOGGING // defined in "memoize_logging.h"
 
 /* This is the debug log file that's initialized in pg_initialize() to
@@ -416,10 +423,6 @@ PyObject* get_global_container(PyObject* obj) {
 }
 
 void set_arg_reachable_func_start_time(PyObject* obj, unsigned int start_func_call_time) {
-  if (start_func_call_time == 0) {
-    return;
-  }
-
   if (!level_1_map) {
     return;
   }
@@ -544,10 +547,6 @@ PyObject* get_global_container(PyObject* obj) {
 }
 
 void set_arg_reachable_func_start_time(PyObject* obj, unsigned int start_func_call_time) {
-  if (start_func_call_time == 0) {
-    return;
-  }
-
   if (!level_1_map) {
     return;
   }
@@ -1061,6 +1060,17 @@ static void mark_impure(PyFrameObject* f, char* why) {
   }
 
   f->func_memo_info->is_impure = 1;
+
+  // Minor optimization (possibly):
+  //   Clear the arg_reachable_func_start_time counts for all arguments,
+  //   since we no longer need to track them
+  if (f->stored_args_lst) {
+    Py_ssize_t i;
+    for (i = 0; i < PyList_Size(f->stored_args_lst); i++) {
+      PyObject* elt = PyList_GET_ITEM(f->stored_args_lst, i);
+      set_arg_reachable_func_start_time(elt, 0);
+    }
+  }
 }
 
 static void mark_entire_stack_impure(char* why) {
@@ -2024,46 +2034,52 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 // only reach here if you actually call the function, NOT if you skip it:
 pg_enter_frame_done:
 
-  /* We can now use co_argcount to figure out how many parameters are
-     passed on the top of the stack.  By this point, the top of the
-     stack should be populated with passed-in parameter values.  All the
-     grossness of keyword and default arguments have been resolved at
-     this point, yay!
+  // Optimization: we only need to do this for functions that stand some
+  // chance of being memoized (or else it's pointless to do so)
+  if (f->func_memo_info && !f->func_memo_info->is_impure) {
 
-     TODO: I haven't tested support for varargs yet */
-  f->stored_args_lst = PyList_New(f->f_code->co_argcount);
+    /* We can now use co_argcount to figure out how many parameters are
+       passed on the top of the stack.  By this point, the top of the
+       stack should be populated with passed-in parameter values.  All the
+       grossness of keyword and default arguments have been resolved at
+       this point, yay!
 
-  Py_ssize_t i;
-  for (i = 0; i < f->f_code->co_argcount; i++) {
-    PyObject* elt = f->f_localsplus[i];
-    PyList_SET_ITEM(f->stored_args_lst, i, elt);
-    Py_INCREF(elt);
+       TODO: I haven't tested support for varargs yet */
+    f->stored_args_lst = PyList_New(f->f_code->co_argcount);
 
-    unsigned int arg_reachable_func_start_time = get_arg_reachable_func_start_time(elt);
+    Py_ssize_t i;
+    for (i = 0; i < f->f_code->co_argcount; i++) {
+      PyObject* elt = f->f_localsplus[i];
+      PyList_SET_ITEM(f->stored_args_lst, i, elt);
+      Py_INCREF(elt);
 
-    // always update if it hasn't been set yet:
-    if (arg_reachable_func_start_time == 0) {
-      set_arg_reachable_func_start_time(elt, f->start_func_call_time);
-    }
-    else {
-      /* subtle ... if arg_reachable_func_start_time of elt is equal to
-         the start time of any function currently on the stack, then do
-         NOT update it, since we want it set to the value of the
-         outer-most function */
-      char already_an_arg = 0;
-      PyFrameObject* cur_frame = f->f_back;
-      while (cur_frame) {
-        if (arg_reachable_func_start_time == cur_frame->start_func_call_time) {
-          already_an_arg = 1;
-          break;
-        }
-        cur_frame = cur_frame->f_back;
-      }
+      unsigned int arg_reachable_func_start_time = get_arg_reachable_func_start_time(elt);
 
-      if (!already_an_arg) {
+      // always update if it hasn't been set yet:
+      if (arg_reachable_func_start_time == 0) {
         set_arg_reachable_func_start_time(elt, f->start_func_call_time);
       }
+      else {
+        /* subtle ... if arg_reachable_func_start_time of elt is equal to
+           the start time of any function currently on the stack, then do
+           NOT update it, since we want it set to the value of the
+           outer-most function */
+        char already_an_arg = 0;
+        PyFrameObject* cur_frame = f->f_back;
+        while (cur_frame) {
+          if (arg_reachable_func_start_time == cur_frame->start_func_call_time) {
+            already_an_arg = 1;
+            break;
+          }
+          cur_frame = cur_frame->f_back;
+        }
+
+        if (!already_an_arg) {
+          set_arg_reachable_func_start_time(elt, f->start_func_call_time);
+        }
+      }
     }
+
   }
 
 
@@ -2397,6 +2413,21 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 pg_exit_frame_done:
 
   Py_XDECREF(stored_args_lst_copy);
+
+  // if it's not yet impure, and there's no memoized_vals, then inc
+  // num_calls_with_no_memoized_vals and set the function to impure
+  // (thus ignoring it) if count passes NO_MEMOIZED_VALS_THRESHOLD
+  if (my_func_memo_info &&
+      !my_func_memo_info->is_impure &&
+      !my_func_memo_info->memoized_vals) {
+    my_func_memo_info->num_calls_with_no_memoized_vals++;
+
+    if (my_func_memo_info->num_calls_with_no_memoized_vals > NO_MEMOIZED_VALS_THRESHOLD) {
+      // HACK - use impure as a surrogate for 'ignore me'
+      // TODO: print a log message here
+      my_func_memo_info->is_impure = 1;
+    }
+  }
 
   MEMOIZE_PUBLIC_END();
 }

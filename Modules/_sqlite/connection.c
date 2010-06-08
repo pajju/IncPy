@@ -102,7 +102,8 @@ int pysqlite_connection_init(pysqlite_Connection* self, PyObject* args, PyObject
         Py_END_ALLOW_THREADS
 
         /* pgbovine */
-        self->db_file_handle = PyFile_FromString(PyString_AsString(database_utf8), "r");
+        self->db_file_handle =
+          (PyFileObject*)PyFile_FromString(PyString_AsString(database_utf8), "r");
         assert(self->db_file_handle);
 
         Py_DECREF(database_utf8);

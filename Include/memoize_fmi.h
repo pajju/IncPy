@@ -63,6 +63,10 @@ typedef struct {
   char all_code_deps_SAT; // are all code dependencies satisfied during THIS execution?
   char memoized_vals_loaded; // have we attempted to load memoized_vals from disk yet?
 
+  // how many times has this function been executed with the
+  // memoized_vals field as NULL? (small int from 0 to 255)
+  unsigned char num_calls_with_no_memoized_vals;
+
 } FuncMemoInfo;
 
 #define GET_CANONICAL_NAME(fmi) ((PyCodeObject*)fmi->f_code)->pg_canonical_name
