@@ -810,7 +810,8 @@ onioerror:
 }
 #endif /* HAVE_FTRUNCATE */
 
-static PyObject *
+// pgbovine - make it non-static so that we can call it directly from memoize.c
+/*static*/ PyObject *
 file_tell(PyFileObject *f)
 {
 	Py_off_t pos;
