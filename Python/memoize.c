@@ -2416,7 +2416,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     Py_DECREF(files_read);
 
 
-    PyObject* final_file_seek_pos = PyDict_New();
+    PyObject* final_file_seek_pos = NULL; // lazy-init
 
     /* we need to dig through this function's ORIGINAL arguments and
        find the ACTUAL file objects (not their proxies), so that we can
@@ -2429,13 +2429,18 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
         PyFileObject* file_obj = (PyFileObject*)elt;
         PyObject* file_pos = file_tell(file_obj);
         assert(file_pos);
+        if (!final_file_seek_pos) {
+          final_file_seek_pos = PyDict_New();
+        }
         PyDict_SetItem(final_file_seek_pos, file_obj->f_name, file_pos);
         Py_DECREF(file_pos);
       }
     }
 
-    PyDict_SetItemString(memo_table_entry, "final_file_seek_pos", final_file_seek_pos);
-    Py_DECREF(final_file_seek_pos);
+    if (final_file_seek_pos) {
+      PyDict_SetItemString(memo_table_entry, "final_file_seek_pos", final_file_seek_pos);
+      Py_DECREF(final_file_seek_pos);
+    }
   }
 
   if (f->files_written_set) {
