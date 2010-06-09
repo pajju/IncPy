@@ -63,6 +63,12 @@ def render_memoized_vals(memoized_vals):
       pass
 
     try:
+      final_file_seek_pos = e['final_file_seek_pos']
+      print '  Final seek position for read files:', final_file_seek_pos
+    except KeyError:
+      pass
+
+    try:
       file_write_dependencies = e['files_written']
       print '  Files written:', ','.join(sorted(file_write_dependencies.keys()))
     except KeyError:

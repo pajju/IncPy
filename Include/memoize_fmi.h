@@ -37,6 +37,8 @@ typedef struct {
   //                (to facilitate mutation for COW optimization)
   //   "stdout_buf" --> buffered stdout string (OPTIONAL)
   //   "stderr_buf" --> buffered stderr string (OPTIONAL)
+  //   "final_file_seek_pos" --> dict mapping filenames to their seek
+  //                             positions at function exit time (OPTIONAL)
   //
   //   "runtime_ms" --> how many milliseconds it took to run
   //

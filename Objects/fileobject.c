@@ -644,7 +644,8 @@ _portable_ftell(FILE* fp)
 }
 
 
-static PyObject *
+// pgbovine - make it non-static so that we can call it directly from memoize.c
+/*static*/ PyObject *
 file_seek(PyFileObject *f, PyObject *args)
 {
 	int whence;

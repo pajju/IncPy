@@ -213,6 +213,8 @@ static void deepcopy_and_add_global_read(PyObject* varname,
                                          PyObject* output_dict);
 static void add_file_dependency(PyObject* filename, PyObject* output_dict);
 
+extern PyObject* file_tell(PyFileObject *f); // from Objects/fileobject.c
+
 // to shut gcc up ...
 extern time_t PyOS_GetLastModificationTime(char *, FILE *);
 
@@ -1701,6 +1703,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   PyObject* memoized_retval = NULL;
   PyObject* memoized_stdout_buf = NULL;
   PyObject* memoized_stderr_buf = NULL;
+  PyObject* final_file_seek_pos = NULL;
 
   long memoized_runtime_ms = -1;
 
@@ -1943,6 +1946,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
       // these can be null since they are optional fields in the dict
       memoized_stdout_buf = PyDict_GetItemString(elt, "stdout_buf");
       memoized_stderr_buf = PyDict_GetItemString(elt, "stderr_buf");
+      final_file_seek_pos = PyDict_GetItemString(elt, "final_file_seek_pos");
 
       break; // break out of this loop, we've found the first (should be ONLY) match!
     }
@@ -2010,6 +2014,29 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
                              cur_frame->stderr_cStringIO);
         }
         cur_frame = cur_frame->f_back;
+      }
+    }
+
+    if (final_file_seek_pos) {
+      /* we need to dig through this function's ORIGINAL arguments and
+         find the ACTUAL file objects (not their proxies), so that we can
+         set their seek positions to their corresponding values
+         in final_file_seek_pos */
+      Py_ssize_t i;
+      for (i = 0; i < f->f_code->co_argcount; i++) {
+        PyObject* elt = f->f_localsplus[i];
+        if (PyFile_Check(elt)) {
+          PyFileObject* file_obj = (PyFileObject*)elt;
+
+          // try to find it in the final_file_seek_pos dict ...
+          PyObject* memoized_seek_pos =
+            PyDict_GetItem(final_file_seek_pos, file_obj->f_name);
+          if (memoized_seek_pos) {
+            PyObject* tmp_args = PyTuple_Pack(1, memoized_seek_pos);
+            file_seek(file_obj, tmp_args);
+            Py_DECREF(tmp_args);
+          }
+        }
       }
     }
 
@@ -2380,8 +2407,31 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     while (_PySet_Next(f->files_read_set, &s_pos, &read_filename)) {
       add_file_dependency(read_filename, files_read);
     }
+
     PyDict_SetItemString(memo_table_entry, "files_read", files_read);
     Py_DECREF(files_read);
+
+
+    PyObject* final_file_seek_pos = PyDict_New();
+
+    /* we need to dig through this function's ORIGINAL arguments and
+       find the ACTUAL file objects (not their proxies), so that we can
+       record their seek positions at the end of this function's
+       invocation */
+    Py_ssize_t i;
+    for (i = 0; i < f->f_code->co_argcount; i++) {
+      PyObject* elt = f->f_localsplus[i];
+      if (PyFile_Check(elt)) {
+        PyFileObject* file_obj = (PyFileObject*)elt;
+        PyObject* file_pos = file_tell(file_obj);
+        assert(file_pos);
+        PyDict_SetItem(final_file_seek_pos, file_obj->f_name, file_pos);
+        Py_DECREF(file_pos);
+      }
+    }
+
+    PyDict_SetItemString(memo_table_entry, "final_file_seek_pos", final_file_seek_pos);
+    Py_DECREF(final_file_seek_pos);
   }
 
   if (f->files_written_set) {
