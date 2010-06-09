@@ -983,7 +983,23 @@ void add_new_code_dep(PyCodeObject* cod) {
 void pg_CREATE_FUNCTION_event(PyFunctionObject* func) {
   MEMOIZE_PUBLIC_START()
   PyCodeObject* cod = (PyCodeObject*)(func->func_code);
-  add_new_code_dep(cod);
+
+  // first check if its docstring contains the special "incpy.ignore"
+  // annotation, and if so, ignore its code; otherwise, create a new
+  // code dependency
+  if (func->func_doc &&
+      PyString_CheckExact(func->func_doc) &&
+      (strcmp(PyString_AsString(func->func_doc), "incpy.ignore") == 0)) {
+    PG_LOG_PRINTF("dict(event='IGNORING_FUNCTION', what='%s')\n",
+                  PyString_AsString(cod->pg_canonical_name));
+    USER_LOG_PRINTF("IGNORING_FUNCTION | %s\n",
+                    PyString_AsString(cod->pg_canonical_name));
+    cod->pg_ignore = 1;
+  }
+  else {
+    add_new_code_dep(cod);
+  }
+
   MEMOIZE_PUBLIC_END()
 }
 
