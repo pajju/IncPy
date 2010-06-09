@@ -213,7 +213,10 @@ static void deepcopy_and_add_global_read(PyObject* varname,
                                          PyObject* output_dict);
 static void add_file_dependency(PyObject* filename, PyObject* output_dict);
 
-extern PyObject* file_tell(PyFileObject *f); // from Objects/fileobject.c
+// from Objects/fileobject.c
+extern PyObject* file_tell(PyFileObject *f);
+extern PyObject* file_seek(PyFileObject *f, PyObject *args);
+
 
 // to shut gcc up ...
 extern time_t PyOS_GetLastModificationTime(char *, FILE *);
@@ -2033,7 +2036,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
             PyDict_GetItem(final_file_seek_pos, file_obj->f_name);
           if (memoized_seek_pos) {
             PyObject* tmp_args = PyTuple_Pack(1, memoized_seek_pos);
-            file_seek(file_obj, tmp_args);
+            PyObject* tmp_unused = file_seek(file_obj, tmp_args);
+            Py_XDECREF(tmp_unused);
             Py_DECREF(tmp_args);
           }
         }
