@@ -131,11 +131,21 @@ program, not our memoization support code.
 #define ENABLE_COW
 
 
+// Optimization to ignore functions when they've been executed
+// NO_MEMOIZED_VALS_THRESHOLD times with no memoized vals ...
+//
+// (disable this optimization for now in part because it gives misleading
+//  log messages; you think something is impure when in fact it's
+//  simply been ignored by this mechanism)
+//#define ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
+
+#ifdef ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
 // Optimization: if a function has been run this many times with
 // no memoized vals (as indicated by the num_calls_with_no_memoized_vals
 // field in its FuncMemoInfo struct), then mark that function as impure
 // and stop tracking it
 #define NO_MEMOIZED_VALS_THRESHOLD 5
+#endif // ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
 
 
 #ifdef ENABLE_DEBUG_LOGGING // defined in "memoize_logging.h"
@@ -2423,6 +2433,8 @@ pg_exit_frame_done:
 
   Py_XDECREF(stored_args_lst_copy);
 
+
+#ifdef ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
   // if it's not yet impure, and there's no memoized_vals, then inc
   // num_calls_with_no_memoized_vals and set the function to impure
   // (thus ignoring it) if count passes NO_MEMOIZED_VALS_THRESHOLD
@@ -2432,11 +2444,11 @@ pg_exit_frame_done:
     my_func_memo_info->num_calls_with_no_memoized_vals++;
 
     if (my_func_memo_info->num_calls_with_no_memoized_vals > NO_MEMOIZED_VALS_THRESHOLD) {
-      // HACK - use impure as a surrogate for 'ignore me'
-      // TODO: print a log message here
-      my_func_memo_info->is_impure = 1;
+      // BIG HACK - use impure as a surrogate for 'ignore me'
+      mark_impure(f, "Ran too many times without any memoized vals");
     }
   }
+#endif // ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
 
   MEMOIZE_PUBLIC_END();
 }
