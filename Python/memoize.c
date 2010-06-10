@@ -356,15 +356,14 @@ static void init_definitely_impure_funcs(void);
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
 
-// to save up to HOST_WORDSIZE times of memory, divide obj_addr
-// by HOST_WORDSIZE, since all addresses should be word-aligned
+// Crazy memory-conserving optimization: we can simply divide obj_addr
+// by sizeof(PyObject), assuming that sizeof(PyObject) is a power of 2,
+// since no two PyObjects will ever be allocated close enough to one
+// another to match the same compressed obj_addr (it doesn't even matter
+// if they're not properly word-aligned)
 #define CREATE_ADDRS \
   UInt64 obj_addr = (UInt64)obj; \
-  if ((obj_addr % HOST_WORDSIZE) != 0) { \
-    fprintf(stderr, "ERROR: %p is not a word-aligned address access\n", (void*)obj); \
-    Py_Exit(1); \
-  } \
-  obj_addr /= HOST_WORDSIZE; \
+  obj_addr /= sizeof(PyObject); \
   UInt16 level_1_addr = (obj_addr >> 48) & METADATA_MAP_MASK; \
   UInt16 level_2_addr = (obj_addr >> 32) & METADATA_MAP_MASK; \
   UInt16 level_3_addr = (obj_addr >> 16) & METADATA_MAP_MASK; \
@@ -474,15 +473,14 @@ void pg_obj_dealloc(PyObject* obj) {
 #else // !HOST_IS_64BIT
 // 32-bit architecture
 
-// to save up to HOST_WORDSIZE times of memory, divide obj_addr
-// by HOST_WORDSIZE, since all addresses should be word-aligned
+// Crazy memory-conserving optimization: we can simply divide obj_addr
+// by sizeof(PyObject), assuming that sizeof(PyObject) is a power of 2,
+// since no two PyObjects will ever be allocated close enough to one
+// another to match the same compressed obj_addr (it doesn't even matter
+// if they're not properly word-aligned)
 #define CREATE_ADDRS \
   UInt32 obj_addr = (UInt32)obj; \
-  if ((obj_addr % HOST_WORDSIZE) != 0) { \
-    fprintf(stderr, "ERROR: %p is not a word-aligned address access\n", (void*)obj); \
-    Py_Exit(1); \
-  } \
-  obj_addr /= HOST_WORDSIZE; \
+  obj_addr /= sizeof(PyObject); \
   UInt16 level_1_addr = (obj_addr >> 16) & METADATA_MAP_MASK; \
   UInt16 level_2_addr = obj_addr & METADATA_MAP_MASK;
 
@@ -1104,6 +1102,15 @@ void pg_initialize() {
       (sizeof(UInt32) != 4) ||
       (sizeof(UInt64) != 8)) {
     fprintf(stderr, "ERROR: UInt8, UInt16, UInt32, UInt64 types have the wrong sizes.\n");
+    Py_Exit(1);
+  }
+
+  // make sure that sizeof(PyObject) is a power of 2, so that our
+  // memory-saving optimization in CREATE_ADDRS can work properly
+  // ( use a quick check for positive ints:
+  //     x is a power of 2 iff (x & (x - 1) == 0) )
+  if ((sizeof(PyObject) & (sizeof(PyObject) - 1)) != 0) {
+    fprintf(stderr, "ERROR: sizeof(PyObject) is not a power of 2.\n");
     Py_Exit(1);
   }
 
