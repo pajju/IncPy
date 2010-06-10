@@ -356,11 +356,23 @@ static void init_definitely_impure_funcs(void);
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
 
+// to save up to HOST_WORDSIZE times of memory, divide obj_addr
+// by HOST_WORDSIZE, since all addresses should be word-aligned
+#define CREATE_ADDRS \
+  UInt64 obj_addr = (UInt64)obj; \
+  if ((obj_addr % HOST_WORDSIZE) != 0) { \
+    fprintf(stderr, "ERROR: %p is not a word-aligned address access\n", (void*)obj); \
+    Py_Exit(1); \
+  } \
+  obj_addr /= HOST_WORDSIZE; \
+  UInt16 level_1_addr = (obj_addr >> 48) & METADATA_MAP_MASK; \
+  UInt16 level_2_addr = (obj_addr >> 32) & METADATA_MAP_MASK; \
+  UInt16 level_3_addr = (obj_addr >> 16) & METADATA_MAP_MASK; \
+  UInt16 level_4_addr = obj_addr & METADATA_MAP_MASK;
+
+
 #define CREATE_64_BIT_MAPS \
-  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK; \
-  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK; \
-  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK; \
-  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK; \
+  CREATE_ADDRS \
  \
   obj_metadata*** level_2_map = level_1_map[level_1_addr]; \
   if (!level_2_map) { \
@@ -400,26 +412,15 @@ void set_global_container(PyObject* obj, PyObject* global_container) {
 }
 
 PyObject* get_global_container(PyObject* obj) {
-  if (!level_1_map) {
+  CREATE_ADDRS
+
+  if (!level_1_map ||
+      !level_1_map[level_1_addr] ||
+      !level_1_map[level_1_addr][level_2_addr] ||
+      !level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
     return NULL;
   }
 
-  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr]) {
-    return NULL;
-  }
-
-  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
-  if(!level_1_map[level_1_addr][level_2_addr]) {
-    return NULL;
-  }
-
-  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
-    return NULL;
-  }
-
-  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
   return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr].global_container_weakref;
 }
 
@@ -437,26 +438,15 @@ void set_arg_reachable_func_start_time(PyObject* obj, unsigned int start_func_ca
 }
 
 unsigned int get_arg_reachable_func_start_time(PyObject* obj) {
-  if (!level_1_map) {
+  CREATE_ADDRS
+
+  if (!level_1_map ||
+      !level_1_map[level_1_addr] ||
+      !level_1_map[level_1_addr][level_2_addr] ||
+      !level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
     return 0;
   }
 
-  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr]) {
-    return 0;
-  }
-
-  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr]) {
-    return 0;
-  }
-
-  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
-    return 0;
-  }
-
-  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
   return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr].arg_reachable_func_start_time;
 }
 
@@ -465,26 +455,14 @@ void pg_obj_dealloc(PyObject* obj) {
   /* for correctness, we must null out this entry when the object is
      deallocated, so that a future object allocated at the same address
      won't have stale data */
-  if (!level_1_map) {
+  CREATE_ADDRS
+
+  if (!level_1_map ||
+      !level_1_map[level_1_addr] ||
+      !level_1_map[level_1_addr][level_2_addr] ||
+      !level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
     return;
   }
-
-  UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr]) {
-    return;
-  }
-
-  UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK;
-  if(!level_1_map[level_1_addr][level_2_addr]) {
-    return;
-  }
-
-  UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr]) {
-    return;
-  }
-
-  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
 
   obj_metadata* cur_entry =
     &level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr];
