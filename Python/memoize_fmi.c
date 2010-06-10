@@ -250,11 +250,14 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
 
   FuncMemoInfo* my_func_memo_info = NEW_func_memo_info(cod);
 
+
+#ifdef ENABLE_DEBUG_LOGGING
   // sanity check to make sure the name matches:
   PyObject* serialized_canonical_name = 
     PyDict_GetItemString(serialized_fmi, "canonical_name");
   assert(serialized_canonical_name);
   assert(_PyString_Eq(serialized_canonical_name, cod->pg_canonical_name));
+#endif // ENABLE_DEBUG_LOGGING
 
 
   // Optimization: leave memoized_vals null for now and lazy-load it from

@@ -145,6 +145,9 @@ typedef unsigned long long int  UInt64;
    (inspired by Valgrind Memcheck's multi-level shadow memory
     implementation: http://valgrind.org/docs/shadow-memory2007.pdf) */
 
+// TODO: implement garbage collection for shadow memory pages
+//       if it makes sense to do so
+
 #define METADATA_MAP_SIZE 65536 // 16 bits
 #define METADATA_MAP_MASK (METADATA_MAP_SIZE-1)
 

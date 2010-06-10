@@ -2397,7 +2397,9 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       add_file_dependency(read_filename, files_read);
     }
 
-    PyDict_SetItemString(memo_table_entry, "files_read", files_read);
+    if (PyDict_Size(files_read) > 0) {
+      PyDict_SetItemString(memo_table_entry, "files_read", files_read);
+    }
     Py_DECREF(files_read);
 
 
