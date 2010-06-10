@@ -148,9 +148,6 @@ typedef unsigned long long int  UInt64;
 #define METADATA_MAP_SIZE 65536 // 16 bits
 #define METADATA_MAP_MASK (METADATA_MAP_SIZE-1)
 
-#define SMALL_METADATA_MAP_SIZE 256 // 8 bits
-#define SMALL_METADATA_MAP_MASK (SMALL_METADATA_MAP_SIZE-1)
-
 
 typedef struct {
   /* WEAK REFERENCE - This should only be set for MUTABLE values
@@ -179,18 +176,14 @@ typedef struct {
 #ifdef HOST_IS_64BIT
 // 64-bit architecture
 
-obj_metadata***** level_1_map;
+obj_metadata**** level_1_map;
 
 /*
 
-level_1_map - allocate to 65536 obj_metadata**** elements,     address with obj[63:48]
-level_2_map - lazy-allocate to 65536 obj_metadata*** elements, address with obj[47:32]
-level_3_map - lazy-allocate to 65536 obj_metadata** elements,  address with obj[31:16]
-level_4_map - lazy-allocate to 256 obj_metadata* elements,     address with obj[15:8]
-level_5_map - lazy-allocate to 256 obj_metadata elements,      address with obj[7:0]
-
-(we used to have 4 layers, but splitting into 5 layers effectively
-decreased memory usage for large benchmarks, sometimes by 1/3)
+level_1_map - allocate to 65536 obj_metadata*** elements,     address with obj[63:48]
+level_2_map - lazy-allocate to 65536 obj_metadata** elements, address with obj[47:32]
+level_3_map - lazy-allocate to 65536 obj_metadata* elements,  address with obj[31:16]
+level_4_map - lazy-allocate to 65536 obj_metadata elements,   address with obj[15:0]
 
 */
 

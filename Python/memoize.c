@@ -360,39 +360,31 @@ static void init_definitely_impure_funcs(void);
   UInt16 level_1_addr = (((UInt64)obj) >> 48) & METADATA_MAP_MASK; \
   UInt16 level_2_addr = (((UInt64)obj) >> 32) & METADATA_MAP_MASK; \
   UInt16 level_3_addr = (((UInt64)obj) >> 16) & METADATA_MAP_MASK; \
-  UInt8 level_4_addr  = (((UInt64)obj) >> 8) & SMALL_METADATA_MAP_MASK; \
-  UInt8 level_5_addr  = ((UInt64)obj) & SMALL_METADATA_MAP_MASK; \
+  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK; \
  \
-  obj_metadata**** level_2_map = level_1_map[level_1_addr]; \
+  obj_metadata*** level_2_map = level_1_map[level_1_addr]; \
   if (!level_2_map) { \
     level_2_map = level_1_map[level_1_addr] = PyMem_New(typeof(*level_2_map), METADATA_MAP_SIZE); \
     memset(level_2_map, 0, sizeof(*level_2_map) * METADATA_MAP_SIZE); \
     /*printf("  NEW level_2_map (size=%d)\n", sizeof(*level_2_map) * METADATA_MAP_SIZE);*/ \
   } \
  \
-  obj_metadata*** level_3_map = level_2_map[level_2_addr]; \
+  obj_metadata** level_3_map = level_2_map[level_2_addr]; \
   if (!level_3_map) { \
     level_3_map = level_2_map[level_2_addr] = PyMem_New(typeof(*level_3_map), METADATA_MAP_SIZE); \
     memset(level_3_map, 0, sizeof(sizeof(*level_3_map)) * METADATA_MAP_SIZE); \
     /*printf("  NEW level_3_map (size=%d)\n", sizeof(*level_3_map) * METADATA_MAP_SIZE);*/ \
   } \
  \
-  obj_metadata** level_4_map = level_3_map[level_3_addr]; \
+  obj_metadata* level_4_map = level_3_map[level_3_addr]; \
   if (!level_4_map) { \
-    level_4_map = level_3_map[level_3_addr] = PyMem_New(typeof(*level_4_map), SMALL_METADATA_MAP_SIZE); \
-    memset(level_4_map, 0, sizeof(*level_4_map) * SMALL_METADATA_MAP_SIZE); \
-    /*printf("  NEW level_4_map (size=%d)\n", sizeof(*level_4_map) * SMALL_METADATA_MAP_SIZE);*/ \
-  } \
- \
-  obj_metadata* level_5_map = level_4_map[level_4_addr]; \
-  if (!level_5_map) { \
-    level_5_map = level_4_map[level_4_addr] = PyMem_New(typeof(*level_5_map), SMALL_METADATA_MAP_SIZE); \
-    memset(level_5_map, 0, sizeof(*level_5_map) * SMALL_METADATA_MAP_SIZE); \
-    /*printf("  NEW level_5_map (size=%d)\n", sizeof(*level_5_map) * SMALL_METADATA_MAP_SIZE);*/ \
+    level_4_map = level_3_map[level_3_addr] = PyMem_New(typeof(*level_4_map), METADATA_MAP_SIZE); \
+    memset(level_4_map, 0, sizeof(*level_4_map) * METADATA_MAP_SIZE); \
+    /*printf("  NEW level_4_map (size=%d)\n", sizeof(*level_4_map) * METADATA_MAP_SIZE);*/ \
   }
 
 
-obj_metadata***** level_1_map = NULL;
+obj_metadata**** level_1_map = NULL;
 
 void set_global_container(PyObject* obj, PyObject* global_container) {
   if (!level_1_map) {
@@ -401,7 +393,7 @@ void set_global_container(PyObject* obj, PyObject* global_container) {
 
   CREATE_64_BIT_MAPS
 
-  level_5_map[level_5_addr].global_container_weakref = global_container;
+  level_4_map[level_4_addr].global_container_weakref = global_container;
 
   // slow sanity check - comment out for speed:
   //assert(get_global_container(obj) == global_container);
@@ -427,14 +419,8 @@ PyObject* get_global_container(PyObject* obj) {
     return NULL;
   }
 
-  UInt8 level_4_addr = (((UInt64)obj) >> 8) & SMALL_METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr]) {
-    return NULL;
-  }
-
-  UInt8 level_5_addr = ((UInt64)obj) & SMALL_METADATA_MAP_MASK;
-
-  return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr][level_5_addr].global_container_weakref;
+  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
+  return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr].global_container_weakref;
 }
 
 void set_arg_reachable_func_start_time(PyObject* obj, unsigned int start_func_call_time) {
@@ -444,7 +430,7 @@ void set_arg_reachable_func_start_time(PyObject* obj, unsigned int start_func_ca
 
   CREATE_64_BIT_MAPS
 
-  level_5_map[level_5_addr].arg_reachable_func_start_time = start_func_call_time;
+  level_4_map[level_4_addr].arg_reachable_func_start_time = start_func_call_time;
 
   // slow sanity check - comment out for speed:
   //assert(get_arg_reachable_func_start_time(obj) == start_func_call_time);
@@ -470,14 +456,8 @@ unsigned int get_arg_reachable_func_start_time(PyObject* obj) {
     return 0;
   }
 
-  UInt8 level_4_addr = (((UInt64)obj) >> 8) & SMALL_METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr]) {
-    return 0;
-  }
-
-  UInt8 level_5_addr = ((UInt64)obj) & SMALL_METADATA_MAP_MASK;
-
-  return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr][level_5_addr].arg_reachable_func_start_time;
+  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
+  return level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr].arg_reachable_func_start_time;
 }
 
 
@@ -504,15 +484,10 @@ void pg_obj_dealloc(PyObject* obj) {
     return;
   }
 
-  UInt8 level_4_addr = (((UInt64)obj) >> 8) & SMALL_METADATA_MAP_MASK;
-  if (!level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr]) {
-    return;
-  }
-
-  UInt8 level_5_addr = ((UInt64)obj) & SMALL_METADATA_MAP_MASK;
+  UInt16 level_4_addr = ((UInt64)obj) & METADATA_MAP_MASK;
 
   obj_metadata* cur_entry =
-    &level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr][level_5_addr];
+    &level_1_map[level_1_addr][level_2_addr][level_3_addr][level_4_addr];
 
   memset(cur_entry, 0, sizeof(*cur_entry));
 }
