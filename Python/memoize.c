@@ -470,6 +470,34 @@ void pg_obj_dealloc(PyObject* obj) {
 }
 
 
+// Caution: this might take quite a while to execute if the program
+// allocates LOTS of shadow memory :(
+static void free_all_shadow_memory(void) {
+  UInt32 level_1_addr;
+  for (level_1_addr = 0; level_1_addr < METADATA_MAP_SIZE; level_1_addr++) {
+    obj_metadata*** level_2_map = level_1_map[level_1_addr];
+    if (level_2_map) {
+      UInt32 level_2_addr;
+      for (level_2_addr = 0; level_2_addr < METADATA_MAP_SIZE; level_2_addr++) {
+        obj_metadata** level_3_map = level_2_map[level_2_addr];
+        if (level_3_map) {
+          UInt32 level_3_addr;
+          for (level_3_addr = 0; level_3_addr < METADATA_MAP_SIZE; level_3_addr++) {
+            obj_metadata* level_4_map = level_3_map[level_3_addr];
+            if (level_4_map) {
+              PyMem_Del(level_4_map);
+            }
+          }
+          PyMem_Del(level_3_map);
+        }
+      }
+      PyMem_Del(level_2_map);
+    }
+  }
+  PyMem_Del(level_1_map);
+  level_1_map = NULL;
+}
+
 #else // !HOST_IS_64BIT
 // 32-bit architecture
 
@@ -555,6 +583,20 @@ void pg_obj_dealloc(PyObject* obj) {
   memset(cur_entry, 0, sizeof(*cur_entry));
 }
 
+
+// Caution: this might take quite a while to execute if the program
+// allocates LOTS of shadow memory :(
+static void free_all_shadow_memory(void) {
+  UInt32 level_1_addr;
+  for (level_1_addr = 0; level_1_addr < METADATA_MAP_SIZE; level_1_addr++) {
+    obj_metadata* level_2_map = level_1_map[level_1_addr];
+    if (level_2_map) {
+      PyMem_Del(level_2_map);
+    }
+  }
+  PyMem_Del(level_1_map);
+  level_1_map = NULL;
+}
 
 #endif // HOST_IS_64BIT
 
@@ -1382,6 +1424,12 @@ void pg_finalize() {
 
   TrieFree(self_mutator_c_methods);
   TrieFree(definitely_impure_funcs);
+
+  // this should free up a lot of memory before you attempt to pickle,
+  // which itself might eat up a good deal of memory :)
+  //
+  // (comment out if this seems like it's too slow)
+  free_all_shadow_memory();
 
   struct stat st;
   // create incpy-cache/ sub-directory if it doesn't already exist
