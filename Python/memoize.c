@@ -133,18 +133,26 @@ program, not our memoization support code.
 
 // Optimization to ignore functions when they've been executed
 // NO_MEMOIZED_VALS_THRESHOLD times with no memoized vals ...
-//
-// (disable this optimization for now in part because it gives misleading
-//  log messages; you think something is impure when in fact it's
-//  simply been ignored by this mechanism)
-//#define ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
+#define ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
 
 #ifdef ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
-// Optimization: if a function has been run this many times with
-// no memoized vals (as indicated by the num_calls_with_no_memoized_vals
-// field in its FuncMemoInfo struct), then mark that function as impure
-// and stop tracking it
+
+/* If a function has been run this many times terminating faster than
+   FAST_THRESHOLD_MS milliseconds each time with no memoized vals (as
+   indicated by the num_fast_calls_with_no_memoized_vals field in its
+   FuncMemoInfo struct), then mark that function as
+   'likely_nothing_to_memoize' and stop tracking it
+
+   the reason I added the FAST_THRESHOLD_MS requirement is that
+   sometimes functions run for slightly less than memoize_time_limit_ms
+   on some invocations and then more on others, but it's extremely
+   unlikely that a function running for FAST_THRESHOLD_MS
+   (<< memoize_time_limit_ms) for a few invocations will all of a sudden
+   take a long time to run and suddenly be eligible for memoization */
+
+#define FAST_THRESHOLD_MS 50
 #define NO_MEMOIZED_VALS_THRESHOLD 5
+
 #endif // ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
 
 
@@ -1707,8 +1715,9 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   }
 
 
-  // punt on all impure functions ... we can't memoize their return values
-  if (f->func_memo_info->is_impure) {
+  // punt on all impure or ignored functions ... we can't memoize their return values
+  // (but we still need to track their dependencies)
+  if (f->func_memo_info->is_impure || f->func_memo_info->likely_nothing_to_memoize) {
     goto pg_enter_frame_done;
   }
 
@@ -2104,7 +2113,9 @@ pg_enter_frame_done:
 
   // Optimization: we only need to do this for functions that stand some
   // chance of being memoized (or else it's pointless to do so)
-  if (f->func_memo_info && !f->func_memo_info->is_impure) {
+  if (f->func_memo_info &&
+      !f->func_memo_info->is_impure &&
+      !f->func_memo_info->likely_nothing_to_memoize) {
 
     /* We can now use co_argcount to figure out how many parameters are
        passed on the top of the stack.  By this point, the top of the
@@ -2224,6 +2235,15 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   // punt completely on all impure functions
   if (my_func_memo_info->is_impure) {
     USER_LOG_PRINTF("CANNOT_MEMOIZE %s | impure | runtime %ld ms\n",
+                    PyString_AsString(canonical_name), runtime_ms);
+    // don't forget to clean up!
+    goto pg_exit_frame_done;
+  }
+
+  // also punt on functions that we've given up on, since they ran too
+  // many times without anything to memoize:
+  if (my_func_memo_info->likely_nothing_to_memoize) {
+    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | erroneously marked as 'likely nothing to memoize' | runtime %ld ms\n",
                     PyString_AsString(canonical_name), runtime_ms);
     // don't forget to clean up!
     goto pg_exit_frame_done;
@@ -2519,17 +2539,17 @@ pg_exit_frame_done:
 
 
 #ifdef ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
-  // if it's not yet impure, and there's no memoized_vals, then inc
-  // num_calls_with_no_memoized_vals and set the function to impure
-  // (thus ignoring it) if count passes NO_MEMOIZED_VALS_THRESHOLD
   if (my_func_memo_info &&
-      !my_func_memo_info->is_impure &&
-      !my_func_memo_info->memoized_vals) {
-    my_func_memo_info->num_calls_with_no_memoized_vals++;
+      !my_func_memo_info->likely_nothing_to_memoize &&
+      !my_func_memo_info->memoized_vals &&
+      (runtime_ms < FAST_THRESHOLD_MS)) {
+    my_func_memo_info->num_fast_calls_with_no_memoized_vals++;
 
-    if (my_func_memo_info->num_calls_with_no_memoized_vals > NO_MEMOIZED_VALS_THRESHOLD) {
-      // BIG HACK - use impure as a surrogate for 'ignore me'
-      mark_impure(f, "Ran too many times without any memoized vals");
+    if (my_func_memo_info->num_fast_calls_with_no_memoized_vals > NO_MEMOIZED_VALS_THRESHOLD) {
+      PG_LOG_PRINTF("dict(event='IGNORING', what='%s', why='likely nothing to memoize')\n",
+                    PyString_AsString(canonical_name));
+
+      my_func_memo_info->likely_nothing_to_memoize = 1;
     }
   }
 #endif // ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION

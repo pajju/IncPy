@@ -98,6 +98,7 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
 
   // it's now pure again until proven otherwise
   func_memo_info->is_impure = 0;
+  func_memo_info->likely_nothing_to_memoize = 0;
 }
 
 

@@ -65,9 +65,15 @@ typedef struct {
   char all_code_deps_SAT; // are all code dependencies satisfied during THIS execution?
   char memoized_vals_loaded; // have we attempted to load memoized_vals from disk yet?
 
-  // how many times has this function been executed with the
-  // memoized_vals field as NULL? (small int from 0 to 255)
-  unsigned char num_calls_with_no_memoized_vals;
+  // should we not even bother memoizing this function? (but we still
+  // need to track its dependencies) ... only relevant when
+  // ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION on
+  char likely_nothing_to_memoize;
+
+  // how many times has this function been executed and terminated
+  // 'quickly' with the memoized_vals field as NULL?  only relevant when
+  // ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION is on
+  unsigned int num_fast_calls_with_no_memoized_vals;
 
 } FuncMemoInfo;
 
