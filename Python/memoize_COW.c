@@ -76,7 +76,7 @@ static void add_all_contained_mutable_object_addrs(PyObject* obj,
   }
 
   // we will hash the object's address, NOT the object itself ...
-  PyObject* myAddr = PyLong_FromLong((long)obj);
+  PyObject* myAddr = PyInt_FromLong((long)obj);
 
   // fixpoint reached!  if you're already in the set, then there's no
   // point in recursing into youself AGAIN (might be an infinite loop 
@@ -143,7 +143,7 @@ void cow_containment_dict_ADD(PyObject* obj) {
     return;
   }
 
-  PyObject* myAddr = PyLong_FromLong((long)obj);
+  PyObject* myAddr = PyInt_FromLong((long)obj);
 
   // if it's already in cow_containment_dict, then don't bother to
   // traverse through it AGAIN ...
@@ -168,7 +168,7 @@ void cow_containment_dict_ADD(PyObject* obj) {
 
 /*
 
-  obj_addr is a PyLong object that represents the ADDRESS of the object
+  obj_addr is a PyInt object that represents the ADDRESS of the object
   that is ABOUT TO BE MUTATED (but hasn't been mutated yet, due to
   pg_about_to_MUTATE_event being called BEFORE the mutation actually
   occurs)
@@ -178,7 +178,7 @@ void cow_containment_dict_ADD(PyObject* obj) {
  */
 static int do_COW_and_update_refs(PyObject* obj_addr) {
   // wow what a dangerous cast, but let's pray that it works properly ;)
-  long addrLong = PyLong_AsLong(obj_addr);
+  long addrLong = PyInt_AsLong(obj_addr);
   PyObject* objPtr = (PyObject*)addrLong;
 
   /* in some crazy cases (e.g., scipy.test()), the reference count is
@@ -227,7 +227,7 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
   PyObject* fmi_addr = NULL;
   Py_ssize_t pos = 0;
   while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
-    long fmi_addr_long = PyLong_AsLong(fmi_addr);
+    long fmi_addr_long = PyInt_AsLong(fmi_addr);
     FuncMemoInfo* func_memo_info = (FuncMemoInfo*)fmi_addr_long;
 
     if (!func_memo_info->memoized_vals) {
@@ -283,7 +283,7 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
 }
 
 void check_COW_mutation(PyObject* obj) {
-  PyObject* myAddr = PyLong_FromLong((long)obj);
+  PyObject* myAddr = PyInt_FromLong((long)obj);
 
   // fast-path return for common case
   if (!PySet_Contains(cow_traced_addresses_set, myAddr)) {

@@ -114,7 +114,7 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
   // next check if it's already been loaded into memory
   PyObject* fmi_addr = PyDict_GetItem(all_func_memo_info_dict, cod->pg_canonical_name);
   if (fmi_addr) {
-    return (FuncMemoInfo*)PyLong_AsLong(fmi_addr);
+    return (FuncMemoInfo*)PyInt_AsLong(fmi_addr);
   }
 
   FuncMemoInfo* my_func_memo_info = NULL;
@@ -168,7 +168,7 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
 
   // add its address to all_func_memo_info_dict:
   assert(my_func_memo_info);
-  fmi_addr = PyLong_FromLong((long)my_func_memo_info);
+  fmi_addr = PyInt_FromLong((long)my_func_memo_info);
   PyDict_SetItem(all_func_memo_info_dict, cod->pg_canonical_name, fmi_addr);
   Py_DECREF(fmi_addr);
 

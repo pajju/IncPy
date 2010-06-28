@@ -254,7 +254,7 @@ unsigned int memoize_time_limit_ms = 1000;
 #endif // Py_DEBUG
 
 
-/* Dict where each key is a canonical name and each value is a PyLong
+/* Dict where each key is a canonical name and each value is a PyInt
    that represents a POINTER to the corresponding FuncMemoInfo struct
    (we can't directly store FuncMemoInfo structs since they're not a
    subtype of PyObject).
@@ -965,7 +965,7 @@ void add_new_code_dep(PyCodeObject* cod) {
     PyObject* fmi_addr = NULL;
     Py_ssize_t pos = 0;
     while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
-      FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyLong_AsLong(fmi_addr);
+      FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyInt_AsLong(fmi_addr);
       func_memo_info->all_code_deps_SAT = 0;
     }
   }
@@ -1326,10 +1326,10 @@ memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
       else if (strcmp(PyString_AsString(lhs_stripped), "time_limit") == 0) {
         // try to see if it's a valid Python long object
         PyObject* time_limit_sec_obj =
-          PyLong_FromString(PyString_AsString(rhs_stripped), NULL, 0);
+          PyInt_FromString(PyString_AsString(rhs_stripped), NULL, 0);
 
         if (time_limit_sec_obj) {
-          long time_limit_sec = PyLong_AsLong(time_limit_sec_obj);
+          long time_limit_sec = PyInt_AsLong(time_limit_sec_obj);
           if (time_limit_sec > 0) {
             // multiply by 1000 to convert to ms ...
             memoize_time_limit_ms = (unsigned int)time_limit_sec * 1000;
@@ -1444,7 +1444,7 @@ void pg_finalize() {
   PyObject* fmi_addr = NULL;
   Py_ssize_t pos = 0;
   while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
-    FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyLong_AsLong(fmi_addr);
+    FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyInt_AsLong(fmi_addr);
 
     PyObject* func_name = GET_CANONICAL_NAME(func_memo_info);
     PyObject* basename = canonical_name_to_filename(func_name);
@@ -1537,7 +1537,7 @@ void pg_finalize() {
   fmi_addr = NULL;
   pos = 0; // reset it!
   while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
-    FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyLong_AsLong(fmi_addr);
+    FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyInt_AsLong(fmi_addr);
     DELETE_func_memo_info(func_memo_info);
   }
   Py_CLEAR(all_func_memo_info_dict);
@@ -1952,7 +1952,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
       if (!dependencies_satisfied) {
         // KILL THIS ENTRY!!!
-        PyObject* tmp_idx = PyLong_FromLong((long)memoized_vals_idx);
+        PyObject* tmp_idx = PyInt_FromLong((long)memoized_vals_idx);
         PyObject_DelItem(memoized_vals_lst, tmp_idx);
         Py_DECREF(tmp_idx);
 
@@ -1977,7 +1977,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
       // blown away soon!!!
       Py_XINCREF(memoized_retval);
 
-      memoized_runtime_ms = PyLong_AsLong(PyDict_GetItemString(elt, "runtime_ms"));
+      memoized_runtime_ms = PyInt_AsLong(PyDict_GetItemString(elt, "runtime_ms"));
 
       // these can be null since they are optional fields in the dict
       memoized_stdout_buf = PyDict_GetItemString(elt, "stdout_buf");
@@ -2394,7 +2394,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   PyDict_SetItemString(memo_table_entry, "retval", retval_lst);
   Py_DECREF(retval_lst);
 
-  PyObject* runtime_ms_obj = PyLong_FromLong(runtime_ms);
+  PyObject* runtime_ms_obj = PyInt_FromLong(runtime_ms);
   PyDict_SetItemString(memo_table_entry, "runtime_ms", runtime_ms_obj);
   Py_DECREF(runtime_ms_obj);
 
@@ -2645,7 +2645,7 @@ static void add_file_dependency(PyObject* filename, PyObject* output_dict) {
     time_t mtime = PyOS_GetLastModificationTime(filename_cstr, fp);
     fclose(fp);
     assert (mtime >= 0); // -1 is an error value
-    PyObject* mtime_obj = PyLong_FromLong((long)mtime);
+    PyObject* mtime_obj = PyInt_FromLong((long)mtime);
     PyDict_SetItem(output_dict, filename, mtime_obj);
     Py_DECREF(mtime_obj);
   }
