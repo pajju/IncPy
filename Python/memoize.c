@@ -2442,7 +2442,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
 
   // save entire memoized_vals_lst_matching_args on disk under the filename:
-  //   incpy-cache/<function name hash>.function/<hash f->stored_args_lst_pickled_str>.pickle
+  //   incpy-cache/<function name hash>.cache/<hash f->stored_args_lst_pickled_str>.pickle
   // TODO: fork off a separate (bounded-time) process to do the saving
 
   struct stat st;
@@ -2452,7 +2452,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   PyObject* subdir_name = hexdigest_str(GET_CANONICAL_NAME(my_func_memo_info));
   PyObject* subdir_path =
-    PyString_FromFormat("incpy-cache/%s.function", PyString_AsString(subdir_name));
+    PyString_FromFormat("incpy-cache/%s.cache", PyString_AsString(subdir_name));
 
   if (stat(PyString_AsString(subdir_path), &st) != 0) {
     mkdir(PyString_AsString(subdir_path), 0777);

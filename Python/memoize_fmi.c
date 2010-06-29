@@ -73,9 +73,11 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
                 PyString_AsString(GET_CANONICAL_NAME(func_memo_info)));
 
   Py_CLEAR(func_memo_info->memoized_vals_dict);
+  // TODO: clear the corresponding entries on disk as well
 
+  // TODO: make this work with memoized_vals_dict ...
   // ugly hack to prevent IncPy from trying to load the now-stale
-  // version of memoized_vals from disk and instead use the proper
+  // version of memoized_vals_dict from disk and instead use the proper
   // value, which is NULL (the now-stale XXX.memoized_vals.pickle file
   // will be deleted at the end of execution)
   func_memo_info->memoized_vals_loaded = 1;
@@ -125,7 +127,7 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
   PyObject* pickle_filename = PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
                                          PyString_AsString(basename));
   Py_DECREF(basename);
-  assert (pickle_filename);
+  assert(pickle_filename);
 
   PyObject* pf = PyFile_FromString(PyString_AsString(pickle_filename), "r");
   Py_DECREF(pickle_filename);
@@ -177,54 +179,6 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
 }
 
 
-// retrieve and possibly lazy-load fmi->memoized_vals
-/*
-PyObject* get_memoized_vals_lst(FuncMemoInfo* fmi) {
-  // lazy-load optimization:
-  if (!fmi->memoized_vals_loaded) {
-    assert(!fmi->memoized_vals);
-
-    PyObject* basename = hexdigest_str(GET_CANONICAL_NAME(fmi));
-
-    PyObject* memoized_vals_fn =
-      PyString_FromFormat("incpy-cache/%s.memoized_vals.pickle",
-                          PyString_AsString(basename));
-
-    PyObject* memoized_vals_infile =
-      PyFile_FromString(PyString_AsString(memoized_vals_fn), "r");
-
-    if (memoized_vals_infile) {
-      // this might be SLOW for a large memoized_vals_lst ...
-      fmi->memoized_vals =
-        PyObject_CallFunctionObjArgs(cPickle_load_func, memoized_vals_infile, NULL);
-
-      if (!fmi->memoized_vals) {
-        assert(PyErr_Occurred());
-        PyErr_Clear();
-        PG_LOG_PRINTF("dict(event='WARNING', what='cannot load memoized vals from disk', funcname='%s', filename='%s')\n",
-                        PyString_AsString(GET_CANONICAL_NAME(fmi)),
-                        PyString_AsString(memoized_vals_fn));
-      }
-      Py_DECREF(memoized_vals_infile);
-    }
-    else {
-      assert(PyErr_Occurred());
-      PyErr_Clear();
-    }
-
-    Py_DECREF(memoized_vals_fn);
-    Py_DECREF(basename);
-
-    // unconditionally set this to 1, so that we only attempt to load
-    // from disk ONCE per execution
-    fmi->memoized_vals_loaded = 1;
-  }
-
-  return fmi->memoized_vals;
-}
-*/
-
-
 // Given a FuncMemoInfo, create a serialized version of all of its
 // dependencies as a newly-allocated dict (ready for pickling).
 PyObject* serialize_func_memo_info_dependencies(FuncMemoInfo* func_memo_info) {
@@ -263,9 +217,9 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
 #endif // ENABLE_DEBUG_LOGGING
 
 
-  // Optimization: leave memoized_vals null for now and lazy-load it from
-  // disk when it's first needed (in get_memoized_vals_lst())
-  //my_func_memo_info->memoized_vals = NULL;
+  // Optimization: leave null for now and lazy-load it from
+  // disk when it's first needed
+  my_func_memo_info->memoized_vals_dict = NULL;
 
 
   PyObject* code_dependencies =
