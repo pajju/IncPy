@@ -61,7 +61,7 @@ FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod) {
 
 
 void DELETE_func_memo_info(FuncMemoInfo* fmi) {
-  Py_CLEAR(fmi->memoized_vals);
+  Py_CLEAR(fmi->memoized_vals_dict);
   Py_CLEAR(fmi->code_dependencies);
   Py_CLEAR(fmi->f_code);
   PyMem_Del(fmi);
@@ -72,7 +72,7 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
   PG_LOG_PRINTF("dict(event='CLEAR_CACHE_AND_MARK_PURE', what='%s')\n",
                 PyString_AsString(GET_CANONICAL_NAME(func_memo_info)));
 
-  Py_CLEAR(func_memo_info->memoized_vals);
+  Py_CLEAR(func_memo_info->memoized_vals_dict);
 
   // ugly hack to prevent IncPy from trying to load the now-stale
   // version of memoized_vals from disk and instead use the proper
@@ -178,6 +178,7 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
 
 
 // retrieve and possibly lazy-load fmi->memoized_vals
+/*
 PyObject* get_memoized_vals_lst(FuncMemoInfo* fmi) {
   // lazy-load optimization:
   if (!fmi->memoized_vals_loaded) {
@@ -221,6 +222,7 @@ PyObject* get_memoized_vals_lst(FuncMemoInfo* fmi) {
 
   return fmi->memoized_vals;
 }
+*/
 
 
 // Given a FuncMemoInfo, create a serialized version of all of its
@@ -263,7 +265,7 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
 
   // Optimization: leave memoized_vals null for now and lazy-load it from
   // disk when it's first needed (in get_memoized_vals_lst())
-  my_func_memo_info->memoized_vals = NULL;
+  //my_func_memo_info->memoized_vals = NULL;
 
 
   PyObject* code_dependencies =

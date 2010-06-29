@@ -208,7 +208,6 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
 
     check for references to objPtr in these structures for ALL functions:
 
-      - memoized args
       - memoized retval
       - memoized global_vars_read
 
@@ -230,47 +229,35 @@ static int do_COW_and_update_refs(PyObject* obj_addr) {
     long fmi_addr_long = PyInt_AsLong(fmi_addr);
     FuncMemoInfo* func_memo_info = (FuncMemoInfo*)fmi_addr_long;
 
-    if (!func_memo_info->memoized_vals) {
-      continue;
-    }
+    if (func_memo_info->memoized_vals_dict) {
+      PyObject* stored_args_lst_pickled_str = NULL;
+      PyObject* memo_table_entry = NULL;
+      Py_ssize_t pos2 = 0;
+      while (PyDict_Next(func_memo_info->memoized_vals_dict, &pos2,
+                         &stored_args_lst_pickled_str, &memo_table_entry)) {
+        assert(PyDict_CheckExact(memo_table_entry));
 
-    Py_ssize_t i;
-    for (i = 0; i < PyList_Size(func_memo_info->memoized_vals); i++) {
-      PyObject* elt = PyList_GET_ITEM(func_memo_info->memoized_vals, i);
-      assert(PyDict_CheckExact(elt));
+        PyObject* retval_lst = PyDict_GetItemString(memo_table_entry, "retval");
+        assert(PyList_Check(retval_lst));
+        assert(PyList_Size(retval_lst) == 1);
 
-      PyObject* args_lst = PyDict_GetItemString(elt, "args");
-      assert(PyList_Check(args_lst));
-
-      Py_ssize_t j;
-      for (j = 0; j < PyList_Size(args_lst); j++) {
-        PyObject* val = PyList_GET_ITEM(args_lst, j);
-        if (val == objPtr) {
+        if (PyList_GET_ITEM(retval_lst, 0) == objPtr) {
           Py_INCREF(copy); // ugh stupid refcounts - PyList_SetItem doesn't inc for us
-          PyList_SetItem(args_lst, j, copy);
+          PyList_SetItem(retval_lst, 0, copy);
         }
-      }
 
-      PyObject* retval_lst = PyDict_GetItemString(elt, "retval");
-      assert(PyList_Check(retval_lst));
-      assert(PyList_Size(retval_lst) == 1);
-
-      if (PyList_GET_ITEM(retval_lst, 0) == objPtr) {
-        Py_INCREF(copy); // ugh stupid refcounts - PyList_SetItem doesn't inc for us
-        PyList_SetItem(retval_lst, 0, copy);
-      }
-
-      PyObject* global_vars_read = PyDict_GetItemString(elt, "global_vars_read");
-      if (global_vars_read) {
-        PyObject* varname = NULL;
-        PyObject* val = NULL;
-        Py_ssize_t pos = 0;
-        while (PyDict_Next(global_vars_read, &pos, &varname, &val)) {
-          // replace reference to objPtr with a reference to copy
-          if (val == objPtr) {
-            // i think it's okay to do a PyDict_SetItem while iterating
-            // through it ... but double-check later to make sure (TODO)
-            PyDict_SetItem(global_vars_read, varname, copy);
+        PyObject* global_vars_read = PyDict_GetItemString(memo_table_entry, "global_vars_read");
+        if (global_vars_read) {
+          PyObject* varname = NULL;
+          PyObject* val = NULL;
+          Py_ssize_t pos3 = 0;
+          while (PyDict_Next(global_vars_read, &pos3, &varname, &val)) {
+            // replace reference to objPtr with a reference to copy
+            if (val == objPtr) {
+              // i think it's okay to do a PyDict_SetItem while iterating
+              // through it ... but double-check later to make sure (TODO)
+              PyDict_SetItem(global_vars_read, varname, copy);
+            }
           }
         }
       }

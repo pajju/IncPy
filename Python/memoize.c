@@ -1491,49 +1491,6 @@ void pg_finalize() {
     Py_DECREF(deps_outfile);
     Py_DECREF(serialized_deps);
     Py_DECREF(deps_fn);
-
-    // separately pickle memoized vals ONLY IF it's been loaded
-    // from disk (or otherwise updated by a clear_cache_and_mark_pure)
-    if (func_memo_info->memoized_vals_loaded) {
-      PyObject* memoized_vals_fn =
-        PyString_FromFormat("incpy-cache/%s.memoized_vals.pickle",
-                            PyString_AsString(basename));
-
-      // if it exists, then pickle it
-      if (func_memo_info->memoized_vals) {
-        PyObject* memoized_vals_outfile =
-          PyFile_FromString(PyString_AsString(memoized_vals_fn), "wb");
-        assert(memoized_vals_outfile);
-
-        // pass in -1 to force cPickle to use a binary protocol
-        PyObject* cPickle_dump_res =
-          PyObject_CallFunctionObjArgs(cPickle_dump_func,
-                                       func_memo_info->memoized_vals,
-                                       memoized_vals_outfile,
-                                       negative_one, NULL);
-        if (cPickle_dump_res) {
-          Py_DECREF(cPickle_dump_res);
-        }
-        else {
-          assert(PyErr_Occurred());
-          PyErr_Clear();
-
-          PG_LOG_PRINTF("dict(event='WARNING', what='memoized vals cannot be pickled', funcname='%s')\n",
-                        PyString_AsString(func_name));
-        }
-
-        Py_DECREF(memoized_vals_outfile);
-      }
-      // REALLY important!!!  If memoized_vals is non-existent, then
-      // we should DELETE the corresponding pickle file since the LACK
-      // of a file corresponds to an empty memoized_vals ...
-      else {
-        unlink(PyString_AsString(memoized_vals_fn));
-      }
-
-      Py_DECREF(memoized_vals_fn);
-    }
-
     Py_DECREF(basename);
   }
 
@@ -2499,7 +2456,7 @@ pg_exit_frame_done:
 #ifdef ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
   if (my_func_memo_info &&
       !my_func_memo_info->likely_nothing_to_memoize &&
-      !my_func_memo_info->memoized_vals &&
+      !my_func_memo_info->memoized_vals_dict &&
       (runtime_ms < FAST_THRESHOLD_MS)) {
     my_func_memo_info->num_fast_calls_with_no_memoized_vals++;
 
