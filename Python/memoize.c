@@ -2101,7 +2101,6 @@ pg_enter_frame_done:
         }
       }
     }
-
   }
 
 
@@ -2441,12 +2440,66 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   PyList_Append(memoized_vals_lst_matching_args, memo_table_entry);
   Py_DECREF(memo_table_entry);
 
-  PG_LOG_PRINTF("dict(event='MEMOIZED_RESULTS', what='%s', runtime_ms='%ld')\n",
-                PyString_AsString(canonical_name),
-                runtime_ms);
-  USER_LOG_PRINTF("MEMOIZED %s | runtime %ld ms\n",
+
+  // save entire memoized_vals_lst_matching_args on disk under the filename:
+  //   incpy-cache/<function name hash>.function/<hash f->stored_args_lst_pickled_str>.pickle
+  // TODO: fork off a separate (bounded-time) process to do the saving
+
+  struct stat st;
+  if (stat("incpy-cache", &st) != 0) {
+    mkdir("incpy-cache", 0777);
+  }
+
+  PyObject* subdir_name = hexdigest_str(GET_CANONICAL_NAME(my_func_memo_info));
+  PyObject* subdir_path =
+    PyString_FromFormat("incpy-cache/%s.function", PyString_AsString(subdir_name));
+
+  if (stat(PyString_AsString(subdir_path), &st) != 0) {
+    mkdir(PyString_AsString(subdir_path), 0777);
+  }
+
+  PyObject* args_lst_hash = hexdigest_str(f->stored_args_lst_pickled_str);
+
+  PyObject* pickle_filename =
+    PyString_FromFormat("%s/%s.pickle",
+                        PyString_AsString(subdir_path), PyString_AsString(args_lst_hash));
+
+  PyObject* pickle_outfile = PyFile_FromString(PyString_AsString(pickle_filename), "wb");
+  assert(pickle_outfile);
+
+  PyObject* negative_one = PyInt_FromLong(-1);
+  PyObject* cPickle_dump_res =
+    PyObject_CallFunctionObjArgs(cPickle_dump_func,
+                                 memoized_vals_lst_matching_args,
+                                 pickle_outfile,
+                                 negative_one, NULL);
+
+  Py_DECREF(negative_one);
+  Py_DECREF(pickle_outfile);
+  Py_DECREF(pickle_filename);
+  Py_DECREF(args_lst_hash);
+  Py_DECREF(subdir_path);
+  Py_DECREF(subdir_name);
+
+  if (cPickle_dump_res) {
+    Py_DECREF(cPickle_dump_res);
+
+    PG_LOG_PRINTF("dict(event='MEMOIZED_RESULTS', what='%s', runtime_ms='%ld')\n",
                   PyString_AsString(canonical_name),
                   runtime_ms);
+    USER_LOG_PRINTF("MEMOIZED %s | runtime %ld ms\n",
+                    PyString_AsString(canonical_name),
+                    runtime_ms);
+  }
+  else {
+    assert(PyErr_Occurred());
+    PyErr_Clear();
+
+    PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='memo table entry unpicklable', funcname='%s')\n",
+                  PyString_AsString(canonical_name));
+    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | memo table entry unpicklable | runtime %ld ms\n",
+                    PyString_AsString(canonical_name), runtime_ms);
+  }
 
   Py_DECREF(retval_copy); // subtle but important for preventing leaks
 
