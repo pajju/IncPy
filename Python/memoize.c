@@ -1123,13 +1123,13 @@ void pg_MARK_IMPURE_event(char* why) {
 }
 
 
-// translates the canonical name func_name into a newly-allocated string
-// that can be used as part of a filename that uniquely identifies it:
-PyObject* canonical_name_to_filename(PyObject* func_name) {
-  PyObject* md5_func = PyObject_CallFunctionObjArgs(hashlib_md5_func, func_name, NULL);
+// translates a string s into a compact md5 hexdigest string suitable
+// for use as a filename
+PyObject* hexdigest_str(PyObject* s) {
+  PyObject* md5_func = PyObject_CallFunctionObjArgs(hashlib_md5_func, s, NULL);
   PyObject* tmp_str = PyString_FromString("hexdigest");
 
-  // Perform: hashlib.md5(func_name).hexdigest()
+  // Perform: hashlib.md5(s).hexdigest()
   PyObject* hexdigest = PyObject_CallMethodObjArgs(md5_func, tmp_str, NULL);
   Py_DECREF(md5_func);
   Py_DECREF(tmp_str);
@@ -1455,7 +1455,7 @@ void pg_finalize() {
     FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyInt_AsLong(fmi_addr);
 
     PyObject* func_name = GET_CANONICAL_NAME(func_memo_info);
-    PyObject* basename = canonical_name_to_filename(func_name);
+    PyObject* basename = hexdigest_str(func_name);
 
     PyObject* deps_fn =
       PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
@@ -1738,13 +1738,27 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   // by now, all code dependencies are still satisfied ...
 
-  PyObject* memoized_vals_lst = get_memoized_vals_lst(f->func_memo_info);
+  f->stored_args_lst = PyList_New(f->f_code->co_argcount);
 
-  /* TODO: this is REALLY EXPENSIVE if memoized_vals_lst and/or
-     its constituent elements are LARGE, since we're just doing a 
-     linear search down memoized_vals_lst, doing an obj_equals 
-     rich-comparison on each element.
-   */
+  Py_ssize_t i;
+  for (i = 0; i < f->f_code->co_argcount; i++) {
+    PyObject* elt = f->f_localsplus[i];
+
+    // create a proxy object at the BEGINNING of the call if
+    // possible, so that we can properly capture the file offset
+    // at the beginning of the call via file_tell()
+    PyObject* proxy = create_proxy_object(elt);
+    if (proxy) {
+      PyList_SET_ITEM(f->stored_args_lst, i, proxy);
+      // no need to Py_INCREF, since create_proxy_object creates a new object
+    }
+    else {
+      PyList_SET_ITEM(f->stored_args_lst, i, elt);
+      Py_INCREF(elt);
+    }
+  }
+
+
   PyObject* memoized_retval = NULL;
   PyObject* memoized_stdout_buf = NULL;
   PyObject* memoized_stderr_buf = NULL;
@@ -1752,248 +1766,209 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   long memoized_runtime_ms = -1;
 
-  if (memoized_vals_lst) {
-    Py_ssize_t memoized_vals_idx;
-    for (memoized_vals_idx = 0;
-         memoized_vals_idx < PyList_Size(memoized_vals_lst);
-         memoized_vals_idx++) {
-      PyObject* elt = PyList_GET_ITEM(memoized_vals_lst, memoized_vals_idx);
-      assert(PyDict_CheckExact(elt));
+  if (f->func_memo_info->memoized_vals_dict) {
 
-      // try to find whether the function has been called before with
-      // this combination of arguments and global variable values:
+    assert(!f->stored_args_lst_pickled_str);
+
+    // pass in -1 to force cPickle to use a binary protocol
+    PyObject* negative_one = PyInt_FromLong(-1);
+    f->stored_args_lst_pickled_str =
+      PyObject_CallFunctionObjArgs(cPickle_dumpstr_func,
+                                   f->stored_args_lst, negative_one, NULL);
+    Py_DECREF(negative_one);
+
+    if (f->stored_args_lst_pickled_str) {
+      PYPRINT(f->stored_args_lst_pickled_str);
+    }
+    else {
+      assert(PyErr_Occurred());
+      PyErr_Clear();
+
+      // we now know that arguments can't be pickled, so don't even
+      // bother to do a look-up in memoized_vals_dict
+      goto pg_enter_frame_done;
+    }
+
+
+    PyObject* memoized_vals_matching_args =
+      PyDict_GetItem(f->func_memo_info->memoized_vals_dict,
+                     f->stored_args_lst_pickled_str);
+
+    // this is a list of memo table entries that supposedly match the
+    // given arguments, but we still need to check whether the global
+    // variable values match
+    if (memoized_vals_matching_args) {
       int all_args_and_global_vals_equal = 1;
 
-      PyObject* memoized_arg_lst = PyDict_GetItemString(elt, "args");
-      assert(memoized_arg_lst);
+      Py_ssize_t memoized_vals_idx;
+      for (memoized_vals_idx = 0;
+           memoized_vals_idx < PyList_Size(memoized_vals_matching_args);
+           memoized_vals_idx++) {
+        PyObject* elt = PyList_GET_ITEM(memoized_vals_matching_args, memoized_vals_idx);
+        assert(PyDict_CheckExact(elt));
 
-      // let's iterate through the lists element-by-element
-      // so that we can apply the hash consing COW optimization if
-      // applicable:
-      Py_ssize_t memoized_arg_lst_len = PyList_Size(memoized_arg_lst);
+        // find the first element with global_vars_read matching
+        PyObject* global_vars_read = PyDict_GetItemString(elt, "global_vars_read");
+        if (global_vars_read) {
+          PyObject* global_varname_tuple = NULL;
+          PyObject* memoized_value = NULL;
+          Py_ssize_t pos = 0;
+          while (PyDict_Next(global_vars_read,
+                             &pos, &global_varname_tuple, &memoized_value)) {
+            PyObject* cur_value =
+              find_globally_reachable_obj_by_name(global_varname_tuple, f);
 
-      if (memoized_arg_lst_len != f->f_code->co_argcount) {
-        continue;
-      }
-
-      Py_ssize_t j = -1;
-      for (j = 0; j < memoized_arg_lst_len; j++) {
-        PyObject* memoized_elt = PyList_GET_ITEM(memoized_arg_lst, j);
-        PyObject* actual_elt   = f->f_localsplus[j];
-
-        // compare proxy objects rather than real objects if necessary,
-        // since memoized_elt might be a proxy object
-        PyObject* proxy_elt = create_proxy_object(actual_elt);
-        if (proxy_elt) {
-          actual_elt = proxy_elt; // allocs a new object if non-null
-        }
-        else {
-          Py_INCREF(actual_elt); // to match what happens in the other branch
-        }
-
-        // obj_equals is potentially expensive to compute ...
-        if (!obj_equals(memoized_elt, actual_elt)) {
-          all_args_and_global_vals_equal = 0;
-          Py_DECREF(actual_elt); // tricky tricky!
-          break;
-        }
-        else {
-          /* Optimization: If memoized_elt and actual_elt point to different
-             objects whose values are EQUAL, then simply replace
-             &memoized_elt (the appropriate element within memoized_arg_lst)
-             with actual_elt (the ACTUAL parameter value) so that future
-             comparisons are lightning fast (since their pointers are now
-             equal).  
-          
-             The one caveat is that this must be a COW copy, since it's
-             possible for someone to mutate actual_elt and have its value
-             actually NOT be equal to memoized_elt any longer.  In that
-             case, we should set &memoized_elt (the appropriate element
-             within memoized_arg_lst) back to its original value.
-
-             UPDATE: Let's disable the hash consing optimization for
-             now, since the call to cow_containment_dict_ADD REALLY
-             slows things down in some benchmarks by shooting the memory
-             usage THROUGH THE ROOF! */
-#ifdef USE_HASH_CONSING_OPT
-
-#ifdef ENABLE_COW
-          // Remember, do this only their values are equal but their
-          // addresses are NOT EQUAL ...
-          if (memoized_elt != actual_elt) {
-            PyList_SetItem(memoized_arg_lst, j, actual_elt);
-            Py_INCREF(actual_elt); // PyList_SetItem doesn't incref the new item
-            // make it a COW copy ...
-            cow_containment_dict_ADD(actual_elt);
-          }
-#endif // ENABLE_COW
-
-#endif // USE_HASH_CONSING_OPT
-        }
-
-        Py_DECREF(actual_elt); // tricky tricky!
-      }
-
-      if (!all_args_and_global_vals_equal) {
-        continue; // ... onto next element of memoized_vals_lst
-      }
-
-      // we've matched up the args, now see if global vars match ...
-      PyObject* global_vars_read = PyDict_GetItemString(elt, "global_vars_read");
-      if (global_vars_read) {
-        PyObject* global_varname_tuple = NULL;
-        PyObject* memoized_value = NULL;
-        Py_ssize_t pos = 0;
-        while (PyDict_Next(global_vars_read,
-                           &pos, &global_varname_tuple, &memoized_value)) {
-          PyObject* cur_value =
-            find_globally_reachable_obj_by_name(global_varname_tuple, f);
-
-          if (!cur_value) {
-            // we can't even find the global object, then PUNT!
+            if (!cur_value) {
+              // we can't even find the global object, then PUNT!
 #ifdef ENABLE_DEBUG_LOGGING
-            PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
-            char* varname_str = PyString_AsString(tmp_str);
-            PG_LOG_PRINTF("dict(warning='GLOBAL VAR NOT FOUND, varname=\"%s\")\n",
-                          varname_str);
-            Py_DECREF(tmp_str);
+              PyObject* tmp_str = PyObject_Repr(global_varname_tuple);
+              char* varname_str = PyString_AsString(tmp_str);
+              PG_LOG_PRINTF("dict(warning='GLOBAL VAR NOT FOUND, varname=\"%s\")\n",
+                            varname_str);
+              Py_DECREF(tmp_str);
 #endif // ENABLE_DEBUG_LOGGING
 
-            all_args_and_global_vals_equal = 0;
-            break;
-          }
-          else if (!obj_equals(memoized_value, cur_value)) {
-            all_args_and_global_vals_equal = 0;
-            break;
+              all_args_and_global_vals_equal = 0;
+              break;
+            }
+            else if (!obj_equals(memoized_value, cur_value)) {
+              all_args_and_global_vals_equal = 0;
+              break;
+            }
           }
         }
-      }
 
-      if (!all_args_and_global_vals_equal) {
-        continue; // ... onto next element of memoized_vals_lst
-      }
+        if (!all_args_and_global_vals_equal) {
+          continue; // ... onto next element of memoized_vals_matching_args
+        }
 
 
-      // now that we've found a match, check to make sure files_read and
-      // files_written haven't yet been modified.  if any of these files
-      // have been modified, then we must CLEAR ONLY THIS ENTRY in
-      // memoized_vals and break out of the loop
-      char dependencies_satisfied = 1;
+        // now that we've found a match, check to make sure files_read and
+        // files_written haven't yet been modified.  if any of these files
+        // have been modified, then we must CLEAR ONLY THIS ENTRY in
+        // memoized_vals_matching_args and break out of the loop
+        char dependencies_satisfied = 1;
 
-      PyObject* files_read = PyDict_GetItemString(elt, "files_read");
-      if (files_read) {
-        PyObject* dependent_filename = NULL;
-        PyObject* saved_modtime_obj = NULL;
-        Py_ssize_t pos = 0;
-        while (PyDict_Next(files_read,
-                           &pos, &dependent_filename, &saved_modtime_obj)) {
-          char* dependent_filename_str = PyString_AsString(dependent_filename);
-          PyFileObject* fobj = (PyFileObject*)PyFile_FromString(dependent_filename_str, "r");
+        PyObject* files_read = PyDict_GetItemString(elt, "files_read");
+        if (files_read) {
+          PyObject* dependent_filename = NULL;
+          PyObject* saved_modtime_obj = NULL;
+          Py_ssize_t pos = 0;
+          while (PyDict_Next(files_read,
+                             &pos, &dependent_filename, &saved_modtime_obj)) {
+            char* dependent_filename_str = PyString_AsString(dependent_filename);
+            PyFileObject* fobj = (PyFileObject*)PyFile_FromString(dependent_filename_str, "r");
 
-          if (fobj) {
-            long mtime = (long)PyOS_GetLastModificationTime(PyString_AsString(fobj->f_name),
-                                                            fobj->f_fp);
-            Py_DECREF(fobj);
-            long saved_modtime = PyInt_AsLong(saved_modtime_obj);
-            if (mtime != saved_modtime) {
-              PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
+            if (fobj) {
+              long mtime = (long)PyOS_GetLastModificationTime(PyString_AsString(fobj->f_name),
+                                                              fobj->f_fp);
+              Py_DECREF(fobj);
+              long saved_modtime = PyInt_AsLong(saved_modtime_obj);
+              if (mtime != saved_modtime) {
+                PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
+                              dependent_filename_str);
+                USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s changed\n",
+                                PyString_AsString(co->pg_canonical_name),
+                                dependent_filename_str);
+                dependencies_satisfied = 0;
+                break;
+              }
+            }
+            else {
+              assert(PyErr_Occurred());
+              PyErr_Clear();
+              PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
                             dependent_filename_str);
-              USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s changed\n",
+              USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s not found\n",
                               PyString_AsString(co->pg_canonical_name),
                               dependent_filename_str);
               dependencies_satisfied = 0;
               break;
             }
           }
-          else {
-            assert(PyErr_Occurred());
-            PyErr_Clear();
-            PG_LOG_PRINTF("dict(event='FILE_READ_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
-                          dependent_filename_str);
-            USER_LOG_PRINTF("FILE_READ_DEPENDENCY_BROKEN %s | %s not found\n",
-                            PyString_AsString(co->pg_canonical_name),
-                            dependent_filename_str);
-            dependencies_satisfied = 0;
-            break;
-          }
         }
-      }
 
-      PyObject* files_written = PyDict_GetItemString(elt, "files_written");
-      if (files_written) {
-        PyObject* dependent_filename = NULL;
-        PyObject* saved_modtime_obj = NULL;
-        Py_ssize_t pos = 0;
-        while (PyDict_Next(files_written,
-                           &pos, &dependent_filename, &saved_modtime_obj)) {
-          char* dependent_filename_str = PyString_AsString(dependent_filename);
+        PyObject* files_written = PyDict_GetItemString(elt, "files_written");
+        if (files_written) {
+          PyObject* dependent_filename = NULL;
+          PyObject* saved_modtime_obj = NULL;
+          Py_ssize_t pos = 0;
+          while (PyDict_Next(files_written,
+                             &pos, &dependent_filename, &saved_modtime_obj)) {
+            char* dependent_filename_str = PyString_AsString(dependent_filename);
 
-          PyFileObject* fobj = (PyFileObject*)PyFile_FromString(dependent_filename_str, "r");
+            PyFileObject* fobj = (PyFileObject*)PyFile_FromString(dependent_filename_str, "r");
 
-          if (fobj) {
-            long mtime = (long)PyOS_GetLastModificationTime(PyString_AsString(fobj->f_name),
-                                                            fobj->f_fp);
-            Py_DECREF(fobj);
-            long saved_modtime = PyInt_AsLong(saved_modtime_obj);
-            if (mtime != saved_modtime) {
-              PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
+            if (fobj) {
+              long mtime = (long)PyOS_GetLastModificationTime(PyString_AsString(fobj->f_name),
+                                                              fobj->f_fp);
+              Py_DECREF(fobj);
+              long saved_modtime = PyInt_AsLong(saved_modtime_obj);
+              if (mtime != saved_modtime) {
+                PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_CHANGED', what='%s')\n",
+                              dependent_filename_str);
+                USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s changed\n",
+                                PyString_AsString(co->pg_canonical_name),
+                                dependent_filename_str);
+                dependencies_satisfied = 0;
+                break;
+              }
+            }
+            else {
+              assert(PyErr_Occurred());
+              PyErr_Clear();
+              PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
                             dependent_filename_str);
-              USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s changed\n",
+              USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s not found\n",
                               PyString_AsString(co->pg_canonical_name),
                               dependent_filename_str);
               dependencies_satisfied = 0;
               break;
             }
           }
-          else {
-            assert(PyErr_Occurred());
-            PyErr_Clear();
-            PG_LOG_PRINTF("dict(event='FILE_WRITE_DEPENDENCY_BROKEN', why='FILE_NOT_FOUND', what='%s')\n",
-                          dependent_filename_str);
-            USER_LOG_PRINTF("FILE_WRITE_DEPENDENCY_BROKEN %s | %s not found\n",
-                            PyString_AsString(co->pg_canonical_name),
-                            dependent_filename_str);
-            dependencies_satisfied = 0;
-            break;
-          }
         }
+
+        if (!dependencies_satisfied) {
+          // KILL THIS ENTRY!!!
+          PyObject* tmp_idx = PyInt_FromLong((long)memoized_vals_idx);
+          PyObject_DelItem(memoized_vals_matching_args, tmp_idx);
+          Py_DECREF(tmp_idx);
+
+          // TODO: what should we do about the on-disk version of this
+          // data structure?
+
+          PG_LOG_PRINTF("dict(event='CLEAR_CACHE_ENTRY', idx=%u, what'%s')\n",
+                        (unsigned)memoized_vals_idx,
+                        PyString_AsString(co->pg_canonical_name));
+
+          break; // get the heck out of this loop!!!
+        }
+
+
+        // remember that retval is actually a singleton list ...
+        PyObject* memoized_retval_lst = PyDict_GetItemString(elt, "retval");
+        assert(memoized_retval_lst &&
+               PyList_CheckExact(memoized_retval_lst) &&
+               PyList_Size(memoized_retval_lst) == 1);
+
+        memoized_retval = PyList_GET_ITEM(memoized_retval_lst, 0);
+
+        // TODO: do we still need to do this???
+
+        // VERY important to increment its refcount, since
+        // memoized_vals_matching_args (its enclosing parent) will be
+        // blown away soon!!!
+        Py_XINCREF(memoized_retval);
+
+        memoized_runtime_ms = PyInt_AsLong(PyDict_GetItemString(elt, "runtime_ms"));
+
+        // these can be null since they are optional fields in the dict
+        memoized_stdout_buf = PyDict_GetItemString(elt, "stdout_buf");
+        memoized_stderr_buf = PyDict_GetItemString(elt, "stderr_buf");
+        final_file_seek_pos = PyDict_GetItemString(elt, "final_file_seek_pos");
+
+        break; // break out of this loop, we've found the first (should be ONLY) match!
       }
-
-      if (!dependencies_satisfied) {
-        // KILL THIS ENTRY!!!
-        PyObject* tmp_idx = PyInt_FromLong((long)memoized_vals_idx);
-        PyObject_DelItem(memoized_vals_lst, tmp_idx);
-        Py_DECREF(tmp_idx);
-
-        PG_LOG_PRINTF("dict(event='CLEAR_CACHE_ENTRY', idx=%u, what'%s')\n",
-                      (unsigned)memoized_vals_idx,
-                      PyString_AsString(co->pg_canonical_name));
-
-        break; // get the heck out of this loop!!!
-      }
-
-
-      // remember that retval is actually a singleton list ...
-      PyObject* memoized_retval_lst = PyDict_GetItemString(elt, "retval");
-      assert(memoized_retval_lst &&
-             PyList_CheckExact(memoized_retval_lst) &&
-             PyList_Size(memoized_retval_lst) == 1);
-
-      memoized_retval = PyList_GET_ITEM(memoized_retval_lst, 0);
-
-      // VERY important to increment its refcount, since
-      // memoized_vals_lst (its enclosing parent) will be
-      // blown away soon!!!
-      Py_XINCREF(memoized_retval);
-
-      memoized_runtime_ms = PyInt_AsLong(PyDict_GetItemString(elt, "runtime_ms"));
-
-      // these can be null since they are optional fields in the dict
-      memoized_stdout_buf = PyDict_GetItemString(elt, "stdout_buf");
-      memoized_stderr_buf = PyDict_GetItemString(elt, "stderr_buf");
-      final_file_seek_pos = PyDict_GetItemString(elt, "final_file_seek_pos");
-
-      break; // break out of this loop, we've found the first (should be ONLY) match!
     }
   }
 
@@ -2188,7 +2163,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   // start these at NULL to prevent weird segfaults!
   PyObject* canonical_name = NULL;
   FuncMemoInfo* my_func_memo_info = NULL;
-  PyObject* stored_args_lst_copy = NULL;
 
   // if retval is NULL, then that means some exception occurred on the
   // stack and we're in the process of "backing out" ... don't do
@@ -2293,32 +2267,19 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   }
 
 
-  // now make a DEEPCOPY of argument values before storing them.
-  // it's safe to wait until the end of this frame's execution to do so,
-  // since they are guaranteed to have the same values as they did at
-  // the beginning of execution.  if they were mutated, then this
-  // function should be marked impure, so it should not be being
-  // memoized in the first place!
-  stored_args_lst_copy = PyList_New(0);
-
   assert(f->stored_args_lst);
   assert(PyList_Size(f->stored_args_lst) == f->f_code->co_argcount);
 
+  /* don't memoize functions whose arguments don't implement any form
+     of non-identity-based comparison (e.g., using __eq__ or __cmp__
+     methods), since in those cases, there is no way that we can
+     possibly MATCH THEM UP with their original incarnations once we
+     load the memoized values from disk (the version loaded from disk
+     will be a different object than the one in memory, so '==' will
+     ALWAYS FAIL if a comparison method isn't implemented) */
   Py_ssize_t i;
   for (i = 0; i < f->f_code->co_argcount; i++) {
     PyObject* elt = PyList_GET_ITEM(f->stored_args_lst, i);
-    PyObject* copy = NULL;
-
-    /* don't memoize functions whose arguments don't implement any form
-       of non-identity-based comparison (e.g., using __eq__ or __cmp__
-       methods), since in those cases, there is no way that we can
-       possibly MATCH THEM UP with their original incarnations once we
-       load the memoized values from disk (the version loaded from disk
-       will be a different object than the one in memory, so '==' will
-       ALWAYS FAIL if a comparison method isn't implemented)
-
-       for speed purposes, do this BEFORE checking for is_picklable()
-       since has_comparison_method() is much faster! */
     if (!has_comparison_method(elt)) {
       PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Arg %u of %s has no comparison method', type='%s')\n",
                     (unsigned)i,
@@ -2328,69 +2289,57 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
                       PyString_AsString(canonical_name), (unsigned)i, Py_TYPE(elt)->tp_name, runtime_ms);
       goto pg_exit_frame_done;
     }
-
-    if (is_picklable(elt)) {
-#ifdef ENABLE_COW
-      // defer the deepcopy until elt has been mutated
-      copy = elt;
-      Py_INCREF(copy); // always incref to match what happens in deepcopy_func
-      cow_containment_dict_ADD(elt);
-#else
-      // eagerly make the deepcopy NOW!
-      copy = deepcopy(elt);
-
-      if (!copy) {
-        assert(PyErr_Occurred());
-        PyErr_Clear();
-      }
-#endif // ENABLE_COW
-    }
-
-    // If ANY argument is unpicklable, then we must be conservative and
-    // completely punt on trying to memoize this function
-    //
-    // Note that some types can be deepcopy'ed but still NOT pickled
-    // (e.g., functions, modules, etc.)
-    if (copy == NULL) {
-      PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Arg %u of %s unpicklable')\n",
-                    (unsigned)i,
-                    PyString_AsString(canonical_name));
-      USER_LOG_PRINTF("CANNOT_MEMOIZE %s | arg %u unpicklable | runtime %ld ms\n",
-                      PyString_AsString(canonical_name), (unsigned)i, runtime_ms);
-      goto pg_exit_frame_done;
-    }
-
-    PyList_Append(stored_args_lst_copy, copy); // this does incref copy
-    Py_DECREF(copy); // nullify the increfs to prevent leaks
   }
 
 
-  PyObject* retval_copy = NULL;
+  // try to pickle arguments to form a key for memoized_vals_dict
+  if (!f->stored_args_lst_pickled_str) {
+    // pass in -1 to force cPickle to use a binary protocol
+    PyObject* negative_one = PyInt_FromLong(-1);
+    f->stored_args_lst_pickled_str =
+      PyObject_CallFunctionObjArgs(cPickle_dumpstr_func,
+                                   f->stored_args_lst, negative_one, NULL);
+    Py_DECREF(negative_one);
 
-  // if retval can't be pickled, then DON'T MEMOIZE IT 
-  //
-  if (is_picklable(retval)) {
-#ifdef ENABLE_COW
-    // defer the deepcopy until elt has been mutated
-    retval_copy = retval;
-    Py_INCREF(retval_copy); // always incref to match what happens in deepcopy_func
-    cow_containment_dict_ADD(retval);
-#else
-    // eagerly make the deepcopy NOW!
-    retval_copy = deepcopy(retval);
-
-    if (!retval_copy) {
+    if (!f->stored_args_lst_pickled_str) {
       assert(PyErr_Occurred());
       PyErr_Clear();
+
+      PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Argument is unpicklable', funcname='%s')\n",
+                    PyString_AsString(canonical_name));
+      USER_LOG_PRINTF("CANNOT_MEMOIZE %s | argument is unpicklable | runtime %ld ms\n",
+                      PyString_AsString(canonical_name), runtime_ms);
+
+      goto pg_exit_frame_done;
     }
-#endif // ENABLE_COW
   }
 
+  assert(f->stored_args_lst_pickled_str);
+
+  // we don't need to deep-copy the arguments (since we simply use them
+  // to do value MATCHING), but we DO need to deep-copy the return value
+  // (since otherwise we might run into aliasing issues)
+  PyObject* retval_copy = NULL;
+
+#ifdef ENABLE_COW
+  // defer the deepcopy until elt has been mutated
+  retval_copy = retval;
+  Py_INCREF(retval_copy); // always incref to match what happens in deepcopy_func
+  cow_containment_dict_ADD(retval);
+#else
+  // eagerly make the deepcopy NOW!
+  retval_copy = deepcopy(retval);
+
+  if (!retval_copy) {
+    assert(PyErr_Occurred());
+    PyErr_Clear();
+  }
+#endif // ENABLE_COW
 
   if (retval_copy == NULL) {
-    PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Return value of %s unpicklable')\n", 
+    PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Return value of %s cannot be deep-copied')\n",
                   PyString_AsString(canonical_name));
-    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | return value unpicklable | runtime %ld ms\n",
+    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | return value cannot be deep-copied | runtime %ld ms\n",
                     PyString_AsString(canonical_name), runtime_ms);
     goto pg_exit_frame_done;
   }
@@ -2400,7 +2349,24 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   // now memoize results ...
 
-  PyObject* memoized_vals_lst = get_memoized_vals_lst(my_func_memo_info);
+  //PyObject* memoized_vals_lst = get_memoized_vals_lst(my_func_memo_info);
+
+  // TODO: sync with on-disk version:
+  if (!my_func_memo_info->memoized_vals_dict) {
+    my_func_memo_info->memoized_vals_dict = PyDict_New();
+  }
+  PyObject* memoized_vals_dict = my_func_memo_info->memoized_vals_dict;
+
+  // initialize empty list if one doesn't already exist:
+  PyObject* memoized_vals_lst_matching_args =
+    PyDict_GetItem(memoized_vals_dict, f->stored_args_lst_pickled_str);
+
+  if (!memoized_vals_lst_matching_args) {
+    memoized_vals_lst_matching_args = PyList_New(0);
+    PyDict_SetItem(memoized_vals_dict,
+                   f->stored_args_lst_pickled_str, memoized_vals_lst_matching_args);
+  }
+  assert(memoized_vals_lst_matching_args);
 
   // Note that the return value will always be a list of exactly ONE
   // element, but it's a list to facilitate mutation if you do COW
@@ -2410,7 +2376,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   PyList_SET_ITEM(retval_lst, 0, retval_copy); // this does NOT incref retval_copy
 
   PyObject* memo_table_entry = PyDict_New();
-  PyDict_SetItemString(memo_table_entry, "args", stored_args_lst_copy);
+  PyDict_SetItemString(memo_table_entry, "args", f->stored_args_lst);
   PyDict_SetItemString(memo_table_entry, "retval", retval_lst);
   Py_DECREF(retval_lst);
 
@@ -2509,18 +2475,13 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     Py_DECREF(files_written);
   }
 
-  // lazy initialize
-  if (!memoized_vals_lst) {
-    my_func_memo_info->memoized_vals = memoized_vals_lst = PyList_New(0);
-  }
+  /* we're just gonna blindly append memo_table_entry assuming that
+     there are no duplicates in memoized_vals_lst_matching_args
 
-  // we're just gonna blindly append memo_table_entry assuming that
-  // there are no 'duplicates' in memoized_vals_lst
-  //
-  // (if this assumption is violated, then we will get some
-  // funny-looking results ... but I think I should be able to convince
-  // myself of why duplicates should never occur)
-  PyList_Append(memoized_vals_lst, memo_table_entry);
+     (if this assumption is violated, then we will get some
+     funny-looking results ... but I think I should be able to convince
+     myself of why duplicates should never occur) */
+  PyList_Append(memoized_vals_lst_matching_args, memo_table_entry);
   Py_DECREF(memo_table_entry);
 
   PG_LOG_PRINTF("dict(event='MEMOIZED_RESULTS', what='%s', runtime_ms='%ld')\n",
@@ -2534,9 +2495,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
 
 pg_exit_frame_done:
-
-  Py_XDECREF(stored_args_lst_copy);
-
 
 #ifdef ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
   if (my_func_memo_info &&

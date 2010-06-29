@@ -104,8 +104,13 @@ typedef struct _frame {
 
     // list of argument values (aliases, not copies) captured
     // at the beginning of this frame's execution
+    // (includes proxy objects for selected unpicklable types)
     // (Optimization: remain NULL when empty)
     PyObject* stored_args_lst;
+
+    // represents cPickle.dumps(stored_args_lst, protocol=-1)
+    // (Optimization: remain NULL when stored_args_lst is null)
+    PyObject* stored_args_lst_pickled_str;
 
     /* END   - pgbovine new fields */
 

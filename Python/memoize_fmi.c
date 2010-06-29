@@ -121,7 +121,7 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
   FuncMemoInfo* my_func_memo_info = NULL;
 
   // next, check to see whether it's stored in a .pickle file.
-  PyObject* basename = canonical_name_to_filename(cod->pg_canonical_name);
+  PyObject* basename = hexdigest_str(cod->pg_canonical_name);
   PyObject* pickle_filename = PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
                                          PyString_AsString(basename));
   Py_DECREF(basename);
@@ -183,7 +183,7 @@ PyObject* get_memoized_vals_lst(FuncMemoInfo* fmi) {
   if (!fmi->memoized_vals_loaded) {
     assert(!fmi->memoized_vals);
 
-    PyObject* basename = canonical_name_to_filename(GET_CANONICAL_NAME(fmi));
+    PyObject* basename = hexdigest_str(GET_CANONICAL_NAME(fmi));
 
     PyObject* memoized_vals_fn =
       PyString_FromFormat("incpy-cache/%s.memoized_vals.pickle",

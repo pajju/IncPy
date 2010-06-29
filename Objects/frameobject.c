@@ -444,6 +444,7 @@ frame_dealloc(PyFrameObject *f)
   Py_CLEAR(f->globals_read_set);
   // no need to clear f->func_memo_info since it's a weak reference
   Py_CLEAR(f->stored_args_lst);
+  Py_CLEAR(f->stored_args_lst_pickled_str);
 
 
 	co = f->f_code;
@@ -730,6 +731,7 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
   f->globals_read_set = NULL;
   f->func_memo_info = NULL;
   f->stored_args_lst = NULL;
+  f->stored_args_lst_pickled_str = NULL;
 
 	return f;
 }

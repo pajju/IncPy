@@ -17,10 +17,10 @@ extern "C" {
 
 #include "Python.h"
 
-// Object that contains the memo table entry, dependencies, and profiling
+// Object that contains the memo table, dependencies, and profiling
 // metadata for one function (only some fields will be serialized to disk)
 typedef struct {
-  // these fields are serialized to disk
+  // these fields below are serialized to disk
   // (for efficiency, these are NULL pointers if empty)
 
   // (we can't make this into a dict since not all argument values are
@@ -49,12 +49,40 @@ typedef struct {
   //   instead use get_memoized_vals_lst()
   PyObject* memoized_vals;            // List
 
+  /* 
+
+    Key: cPickle.dumps([argument list])
+
+    Value: a LIST of dicts with the following fields:
+
+      "args" --> argument list
+      "global_vars_read" --> dict mapping global vars to values (OPTIONAL)
+
+      "files_read" --> dict mapping files read to modtimes (OPTIONAL)
+      "files_written" --> dict mapping files written to modtimes (OPTIONAL)
+
+      "retval" --> return value, stored in a SINGLETON list
+                   (to facilitate mutation for COW optimization)
+      "stdout_buf" --> buffered stdout string (OPTIONAL)
+      "stderr_buf" --> buffered stderr string (OPTIONAL)
+      "final_file_seek_pos" --> dict mapping filenames to their seek
+                                positions at function exit time (OPTIONAL)
+
+      "runtime_ms" --> how many milliseconds it took to run
+
+    (the reason why this is a list rather than a single dict is because
+    there could be MULTIPLE valid matches for a particular argument
+    list, due to differing global variable values)
+
+  */
+  PyObject* memoized_vals_dict;       // Dict
+
   // all of these fields are serialized to disk as:
   //   incpy-cache/XXX.dependencies.pickle
   PyObject* code_dependencies;        // Dict
 
 
-  // these fields are NOT serialized to disk
+  // these fields below are NOT serialized to disk
 
   PyObject* f_code; // PyCodeObject that contains the function's
                     // canonical name as pg_canonical_name
