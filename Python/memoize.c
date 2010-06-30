@@ -1553,6 +1553,32 @@ static int are_code_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
   return 1;
 }
 
+// populate f->stored_args_lst with aliases to f's current arguments,
+// creating proxy objects when necessary
+static void populate_stored_args_lst(PyFrameObject* f) {
+  assert(!f->stored_args_lst);
+
+  f->stored_args_lst = PyList_New(f->f_code->co_argcount);
+
+  Py_ssize_t i;
+  for (i = 0; i < f->f_code->co_argcount; i++) {
+    PyObject* elt = f->f_localsplus[i];
+
+    // create a proxy object at the BEGINNING of the call if
+    // possible, so that we can properly capture the file offset
+    // at the beginning of the call via file_tell()
+    PyObject* proxy = create_proxy_object(elt);
+    if (proxy) {
+      PyList_SET_ITEM(f->stored_args_lst, i, proxy);
+      // no need to Py_INCREF, since create_proxy_object creates a new object
+    }
+    else {
+      PyList_SET_ITEM(f->stored_args_lst, i, elt);
+      Py_INCREF(elt);
+    }
+  }
+}
+
 
 // returns a PyObject* if we can re-use a memoized result and NULL if we cannot
 PyObject* pg_enter_frame(PyFrameObject* f) {
@@ -1649,8 +1675,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   // by now, all code dependencies are still satisfied ...
 
-
-  // populate stored_args_lst
+  // populate stored_args_lst, so that we can calculate its hash
 
   /* We can now use co_argcount to figure out how many parameters are
      passed on the top of the stack.  By this point, the top of the
@@ -1659,26 +1684,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
      this point, yay!
 
      TODO: I haven't tested support for varargs yet */
-  f->stored_args_lst = PyList_New(f->f_code->co_argcount);
-
-  Py_ssize_t i;
-  for (i = 0; i < f->f_code->co_argcount; i++) {
-    PyObject* elt = f->f_localsplus[i];
-
-    // create a proxy object at the BEGINNING of the call if
-    // possible, so that we can properly capture the file offset
-    // at the beginning of the call via file_tell()
-    PyObject* proxy = create_proxy_object(elt);
-    if (proxy) {
-      PyList_SET_ITEM(f->stored_args_lst, i, proxy);
-      // no need to Py_INCREF, since create_proxy_object creates a new object
-    }
-    else {
-      PyList_SET_ITEM(f->stored_args_lst, i, elt);
-      Py_INCREF(elt);
-    }
-  }
-
+  populate_stored_args_lst(f);
 
   PyObject* memoized_retval = NULL;
   PyObject* memoized_stdout_buf = NULL;
@@ -1688,6 +1694,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   // Optimization: pointless to do a look-up if on-disk cache is empty
   if (!f->func_memo_info->on_disk_cache_empty) {
+    // hash stored_args_lst and try to do a memo table look-up:
+
     assert(!f->stored_args_lst_hash);
 
     // pass in -1 to force cPickle to use a binary protocol
@@ -1713,16 +1721,17 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     PyObject* memoized_vals_matching_args =
       on_disk_cache_GET(f->func_memo_info, f->stored_args_lst_hash);
 
+
     // this is a list of memo table entries that supposedly match the
     // given arguments, but we still need to check whether the global
     // variable values match
     if (memoized_vals_matching_args) {
-      int all_args_and_global_vals_equal = 1;
-
       Py_ssize_t memoized_vals_idx;
       for (memoized_vals_idx = 0;
            memoized_vals_idx < PyList_Size(memoized_vals_matching_args);
            memoized_vals_idx++) {
+        int all_global_vars_match = 1;
+
         PyObject* elt = PyList_GET_ITEM(memoized_vals_matching_args, memoized_vals_idx);
         assert(PyDict_CheckExact(elt));
 
@@ -1747,20 +1756,19 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
               Py_DECREF(tmp_str);
 #endif // ENABLE_DEBUG_LOGGING
 
-              all_args_and_global_vals_equal = 0;
+              all_global_vars_match = 0;
               break;
             }
             else if (!obj_equals(memoized_value, cur_value)) {
-              all_args_and_global_vals_equal = 0;
+              all_global_vars_match = 0;
               break;
             }
           }
         }
 
-        if (!all_args_and_global_vals_equal) {
+        if (!all_global_vars_match) {
           continue; // ... onto next element of memoized_vals_matching_args
         }
-
 
         // now that we've found a match, check to make sure files_read and
         // files_written haven't yet been modified.  if any of these files
@@ -1997,6 +2005,14 @@ pg_enter_frame_done:
   if (f->func_memo_info &&
       !f->func_memo_info->is_impure &&
       !f->func_memo_info->likely_nothing_to_memoize) {
+
+    // VERY subtle but important ... if we're possibly going to memoize
+    // this function at pg_exit_frame() time and we haven't initialized
+    // stored_args_lst yet, then do so right here
+    if (!f->stored_args_lst) {
+      populate_stored_args_lst(f);
+    }
+
     Py_ssize_t i;
     for (i = 0; i < f->f_code->co_argcount; i++) {
       PyObject* elt = f->f_localsplus[i];
