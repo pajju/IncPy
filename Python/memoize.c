@@ -1880,17 +1880,20 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
 
         memoized_retval = PyDict_GetItemString(elt, "retval");
-        // VERY important to increment its refcount, since
-        // memoized_vals_matching_args (its enclosing parent) will be
-        // blown away soon!!!
-        Py_XINCREF(memoized_retval);
-
         memoized_runtime_ms = PyInt_AsLong(PyDict_GetItemString(elt, "runtime_ms"));
 
         // these can be null since they are optional fields in the dict
         memoized_stdout_buf = PyDict_GetItemString(elt, "stdout_buf");
         memoized_stderr_buf = PyDict_GetItemString(elt, "stderr_buf");
         final_file_seek_pos = PyDict_GetItemString(elt, "final_file_seek_pos");
+
+        // VERY important to increment all of their refcounts, since
+        // memoized_vals_matching_args (the enclosing parent) will be
+        // blown away soon!!!
+        Py_XINCREF(memoized_retval);
+        Py_XINCREF(memoized_stdout_buf);
+        Py_XINCREF(memoized_stderr_buf);
+        Py_XINCREF(final_file_seek_pos);
 
         break; // break out of this loop, we've found the first (should be ONLY) match!
       }
