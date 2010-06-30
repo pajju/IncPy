@@ -1390,11 +1390,8 @@ void pg_finalize() {
   TrieFree(self_mutator_c_methods);
   TrieFree(definitely_impure_funcs);
 
-  // this should free up a lot of memory before you attempt to pickle,
-  // which itself might eat up a good deal of memory :)
-  //
-  // (comment out if this seems like it's too slow)
-  free_all_shadow_memory();
+  // seems slow and irrelevant, so don't do it right now ...
+  //free_all_shadow_memory();
 
   struct stat st;
   // create incpy-cache/ sub-directory if it doesn't already exist
