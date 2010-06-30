@@ -127,10 +127,6 @@ program, not our memoization support code.
   pg_activated = 1;
 
 
-// enable copy-on-write optimization
-#define ENABLE_COW
-
-
 // Optimization to ignore functions when they've been executed
 // NO_MEMOIZED_VALS_THRESHOLD times with no memoized vals ...
 #define ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
@@ -1925,8 +1921,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         // VERY important to increment its refcount, since
         // memoized_vals_matching_args (its enclosing parent) will be
         // blown away soon!!!
-        //
-        // TODO: do we still need to do this???
         Py_XINCREF(memoized_retval);
 
         memoized_runtime_ms = PyInt_AsLong(PyDict_GetItemString(elt, "runtime_ms"));
@@ -1938,6 +1932,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
         break; // break out of this loop, we've found the first (should be ONLY) match!
       }
+
+      Py_DECREF(memoized_vals_matching_args); // we don't need this anymore!
     }
   }
 
@@ -2131,6 +2127,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   // start these at NULL to prevent weird segfaults!
   PyObject* canonical_name = NULL;
   FuncMemoInfo* my_func_memo_info = NULL;
+  PyObject* memoized_vals_matching_args = NULL;
 
   // if retval is NULL, then that means some exception occurred on the
   // stack and we're in the process of "backing out" ... don't do
@@ -2322,14 +2319,14 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   // now memoize results ...
 
   // initialize empty list if one doesn't already exist:
-  PyObject* memoized_vals_lst_matching_args =
+  memoized_vals_matching_args =
     on_disk_cache_GET(my_func_memo_info, f->stored_args_lst_hash);
 
-  if (!memoized_vals_lst_matching_args) {
-    memoized_vals_lst_matching_args = PyList_New(0);
+  if (!memoized_vals_matching_args) {
+    memoized_vals_matching_args = PyList_New(0);
   }
 
-  assert(memoized_vals_lst_matching_args);
+  assert(memoized_vals_matching_args);
 
   // Note that the return value will always be a list of exactly ONE
   // element, but it's a list to facilitate mutation if you do COW
@@ -2439,19 +2436,19 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   }
 
   /* we're just gonna blindly append memo_table_entry assuming that
-     there are no duplicates in memoized_vals_lst_matching_args
+     there are no duplicates in memoized_vals_matching_args
 
      (if this assumption is violated, then we will get some
      funny-looking results ... but I think I should be able to convince
      myself of why duplicates should never occur) */
-  PyList_Append(memoized_vals_lst_matching_args, memo_table_entry);
+  PyList_Append(memoized_vals_matching_args, memo_table_entry);
   Py_DECREF(memo_table_entry);
 
 
-  // save the ENTIRE memoized_vals_lst_matching_args on disk:
+  // save the ENTIRE memoized_vals_matching_args on disk:
   PyObject* cPickle_dump_res =
     on_disk_cache_PUT(my_func_memo_info,
-                      f->stored_args_lst_hash, memoized_vals_lst_matching_args);
+                      f->stored_args_lst_hash, memoized_vals_matching_args);
 
   if (cPickle_dump_res) {
     Py_DECREF(cPickle_dump_res);
@@ -2477,6 +2474,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
 
 pg_exit_frame_done:
+  Py_XDECREF(memoized_vals_matching_args);
 
 #ifdef ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
   if (my_func_memo_info &&
