@@ -2258,7 +2258,9 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       }
     }
 
-    PyDict_SetItemString(memo_table_entry, "global_vars_read", global_vars_read);
+    if (PyDict_Size(global_vars_read) > 0) {
+      PyDict_SetItemString(memo_table_entry, "global_vars_read", global_vars_read);
+    }
     Py_DECREF(global_vars_read);
   }
 
