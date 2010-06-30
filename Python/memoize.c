@@ -212,7 +212,7 @@ static PyObject* deepcopy_func = NULL;        // copy.deepcopy
 PyObject* cPickle_load_func = NULL;           // cPickle.load
 PyObject* cPickle_dumpstr_func = NULL;        // cPickle.dumps
 
-static PyObject* cPickle_dump_func = NULL;    // cPickle.dump
+PyObject* cPickle_dump_func = NULL;           // cPickle.dump
 static PyObject* hashlib_md5_func = NULL;     // hashlib.md5
 
 static PyObject* abspath_func = NULL; // os.path.abspath
@@ -1715,27 +1715,26 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     }
   }
 
-
   PyObject* memoized_retval = NULL;
   PyObject* memoized_stdout_buf = NULL;
   PyObject* memoized_stderr_buf = NULL;
   PyObject* final_file_seek_pos = NULL;
-
   long memoized_runtime_ms = -1;
 
-  if (f->func_memo_info->memoized_vals_dict) {
-
-    assert(!f->stored_args_lst_pickled_str);
+  // Optimization: pointless to do a look-up if on-disk cache is empty
+  if (!f->func_memo_info->on_disk_cache_empty) {
+    assert(!f->stored_args_lst_hash);
 
     // pass in -1 to force cPickle to use a binary protocol
     PyObject* negative_one = PyInt_FromLong(-1);
-    f->stored_args_lst_pickled_str =
+    PyObject* args_lst_pickled_str =
       PyObject_CallFunctionObjArgs(cPickle_dumpstr_func,
                                    f->stored_args_lst, negative_one, NULL);
     Py_DECREF(negative_one);
 
-    if (f->stored_args_lst_pickled_str) {
-      PYPRINT(f->stored_args_lst_pickled_str);
+    if (args_lst_pickled_str) {
+      f->stored_args_lst_hash = hexdigest_str(args_lst_pickled_str);
+      Py_DECREF(args_lst_pickled_str);
     }
     else {
       assert(PyErr_Occurred());
@@ -1746,10 +1745,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
       goto pg_enter_frame_done;
     }
 
-
     PyObject* memoized_vals_matching_args =
-      PyDict_GetItem(f->func_memo_info->memoized_vals_dict,
-                     f->stored_args_lst_pickled_str);
+      on_disk_cache_GET(f->func_memo_info, f->stored_args_lst_hash);
 
     // this is a list of memo table entries that supposedly match the
     // given arguments, but we still need to check whether the global
@@ -2248,16 +2245,20 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   }
 
 
-  // try to pickle arguments to form a key for memoized_vals_dict
-  if (!f->stored_args_lst_pickled_str) {
+  // populate f->stored_args_lst_hash by taking a hash of argument list values:
+  if (!f->stored_args_lst_hash) {
     // pass in -1 to force cPickle to use a binary protocol
     PyObject* negative_one = PyInt_FromLong(-1);
-    f->stored_args_lst_pickled_str =
+    PyObject* stored_args_lst_pickled_str =
       PyObject_CallFunctionObjArgs(cPickle_dumpstr_func,
                                    f->stored_args_lst, negative_one, NULL);
     Py_DECREF(negative_one);
 
-    if (!f->stored_args_lst_pickled_str) {
+    if (stored_args_lst_pickled_str) {
+      f->stored_args_lst_hash = hexdigest_str(stored_args_lst_pickled_str);
+      Py_DECREF(stored_args_lst_pickled_str);
+    } 
+    else {
       assert(PyErr_Occurred());
       PyErr_Clear();
 
@@ -2270,7 +2271,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     }
   }
 
-  assert(f->stored_args_lst_pickled_str);
+  assert(f->stored_args_lst_hash);
 
   // we don't need to deep-copy the arguments (since we simply use them
   // to do value MATCHING), but we DO need to deep-copy the return value
@@ -2305,23 +2306,14 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   // now memoize results ...
 
-  //PyObject* memoized_vals_lst = get_memoized_vals_lst(my_func_memo_info);
-
-  // TODO: sync with on-disk version:
-  if (!my_func_memo_info->memoized_vals_dict) {
-    my_func_memo_info->memoized_vals_dict = PyDict_New();
-  }
-  PyObject* memoized_vals_dict = my_func_memo_info->memoized_vals_dict;
-
   // initialize empty list if one doesn't already exist:
   PyObject* memoized_vals_lst_matching_args =
-    PyDict_GetItem(memoized_vals_dict, f->stored_args_lst_pickled_str);
+    on_disk_cache_GET(my_func_memo_info, f->stored_args_lst_hash);
 
   if (!memoized_vals_lst_matching_args) {
     memoized_vals_lst_matching_args = PyList_New(0);
-    PyDict_SetItem(memoized_vals_dict,
-                   f->stored_args_lst_pickled_str, memoized_vals_lst_matching_args);
   }
+
   assert(memoized_vals_lst_matching_args);
 
   // Note that the return value will always be a list of exactly ONE
@@ -2441,45 +2433,10 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   Py_DECREF(memo_table_entry);
 
 
-  // save entire memoized_vals_lst_matching_args on disk under the filename:
-  //   incpy-cache/<function name hash>.cache/<hash f->stored_args_lst_pickled_str>.pickle
-  // TODO: fork off a separate (bounded-time) process to do the saving
-
-  struct stat st;
-  if (stat("incpy-cache", &st) != 0) {
-    mkdir("incpy-cache", 0777);
-  }
-
-  PyObject* subdir_name = hexdigest_str(GET_CANONICAL_NAME(my_func_memo_info));
-  PyObject* subdir_path =
-    PyString_FromFormat("incpy-cache/%s.cache", PyString_AsString(subdir_name));
-
-  if (stat(PyString_AsString(subdir_path), &st) != 0) {
-    mkdir(PyString_AsString(subdir_path), 0777);
-  }
-
-  PyObject* args_lst_hash = hexdigest_str(f->stored_args_lst_pickled_str);
-
-  PyObject* pickle_filename =
-    PyString_FromFormat("%s/%s.pickle",
-                        PyString_AsString(subdir_path), PyString_AsString(args_lst_hash));
-
-  PyObject* pickle_outfile = PyFile_FromString(PyString_AsString(pickle_filename), "wb");
-  assert(pickle_outfile);
-
-  PyObject* negative_one = PyInt_FromLong(-1);
+  // save the ENTIRE memoized_vals_lst_matching_args on disk:
   PyObject* cPickle_dump_res =
-    PyObject_CallFunctionObjArgs(cPickle_dump_func,
-                                 memoized_vals_lst_matching_args,
-                                 pickle_outfile,
-                                 negative_one, NULL);
-
-  Py_DECREF(negative_one);
-  Py_DECREF(pickle_outfile);
-  Py_DECREF(pickle_filename);
-  Py_DECREF(args_lst_hash);
-  Py_DECREF(subdir_path);
-  Py_DECREF(subdir_name);
+    on_disk_cache_PUT(my_func_memo_info,
+                      f->stored_args_lst_hash, memoized_vals_lst_matching_args);
 
   if (cPickle_dump_res) {
     Py_DECREF(cPickle_dump_res);
@@ -2508,8 +2465,8 @@ pg_exit_frame_done:
 
 #ifdef ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
   if (my_func_memo_info &&
+      my_func_memo_info->on_disk_cache_empty &&
       !my_func_memo_info->likely_nothing_to_memoize &&
-      !my_func_memo_info->memoized_vals_dict &&
       (runtime_ms < FAST_THRESHOLD_MS)) {
     my_func_memo_info->num_fast_calls_with_no_memoized_vals++;
 

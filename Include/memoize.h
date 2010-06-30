@@ -30,9 +30,11 @@ PyObject* all_func_memo_info_dict;
 PyObject* func_name_to_code_dependency;
 
 PyObject* cPickle_dumpstr_func;
+PyObject* cPickle_dump_func;
 PyObject* cPickle_load_func;
 
 PyObject* deepcopy(PyObject* obj);
+PyObject* hexdigest_str(PyObject* s);
 
 int obj_equals(PyObject* obj1, PyObject* obj2);
 

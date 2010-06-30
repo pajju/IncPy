@@ -17,6 +17,9 @@
 #include "memoize.h"
 #include "memoize_logging.h"
 
+#include <dirent.h>
+#include <unistd.h>
+
 
 FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject* cod);
 
@@ -61,7 +64,6 @@ FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod) {
 
 
 void DELETE_func_memo_info(FuncMemoInfo* fmi) {
-  Py_CLEAR(fmi->memoized_vals_dict);
   Py_CLEAR(fmi->code_dependencies);
   Py_CLEAR(fmi->f_code);
   PyMem_Del(fmi);
@@ -72,15 +74,30 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
   PG_LOG_PRINTF("dict(event='CLEAR_CACHE_AND_MARK_PURE', what='%s')\n",
                 PyString_AsString(GET_CANONICAL_NAME(func_memo_info)));
 
-  Py_CLEAR(func_memo_info->memoized_vals_dict);
-  // TODO: clear the corresponding entries on disk as well
+  // erase the entire sub-directory for cache entries associated with func_memo_info
+  PyObject* subdir_name = hexdigest_str(GET_CANONICAL_NAME(func_memo_info));
+  PyObject* subdir_path =
+    PyString_FromFormat("incpy-cache/%s-cache", PyString_AsString(subdir_name));
 
-  // TODO: make this work with memoized_vals_dict ...
-  // ugly hack to prevent IncPy from trying to load the now-stale
-  // version of memoized_vals_dict from disk and instead use the proper
-  // value, which is NULL (the now-stale XXX.memoized_vals.pickle file
-  // will be deleted at the end of execution)
-  func_memo_info->memoized_vals_loaded = 1;
+  char* subdir_path_str = PyString_AsString(subdir_path);
+
+  DIR* dp = opendir(subdir_path_str);
+  if (dp) {
+    struct dirent* dirp;
+    while ((dirp = readdir(dp)) != NULL) {
+      if ((strcmp(dirp->d_name, ".") != 0) && (strcmp(dirp->d_name, "..") != 0)) {
+        PyObject* file_path =
+          PyString_FromFormat("%s/%s", subdir_path_str, dirp->d_name);
+        unlink(PyString_AsString(file_path));
+      }
+    }
+    rmdir(subdir_path_str);
+    closedir(dp);
+  }
+ 
+  Py_DECREF(subdir_path);
+  Py_DECREF(subdir_name);
+
 
   Py_CLEAR(func_memo_info->code_dependencies);
 
@@ -126,7 +143,6 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
   PyObject* basename = hexdigest_str(cod->pg_canonical_name);
   PyObject* pickle_filename = PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
                                          PyString_AsString(basename));
-  Py_DECREF(basename);
   assert(pickle_filename);
 
   PyObject* pf = PyFile_FromString(PyString_AsString(pickle_filename), "r");
@@ -147,6 +163,16 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
     else {
       my_func_memo_info = deserialize_func_memo_info(serialized_func_memo_info, cod);
       Py_DECREF(serialized_func_memo_info);
+
+      PyObject* cache_subdir_path =
+        PyString_FromFormat("incpy-cache/%s-cache", PyString_AsString(basename));
+
+      struct stat st;
+      if (stat(PyString_AsString(cache_subdir_path), &st) != 0) {
+        my_func_memo_info->on_disk_cache_empty = 1;
+      }
+
+      Py_DECREF(cache_subdir_path);
     }
 
     Py_DECREF(pf);
@@ -156,6 +182,8 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
     PyErr_Clear();
   }
 
+  Py_DECREF(basename);
+
   // if it's not found, then create a fresh new FuncMemoInfo.
   if (!my_func_memo_info) {
     // clear the error code first
@@ -163,10 +191,6 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
 
     my_func_memo_info = NEW_func_memo_info(cod);
     assert(my_func_memo_info);
-
-    // force writeback of memoized_vals (dunno if this is strictly
-    // necessary, but just do it to be paranoid)
-    my_func_memo_info->memoized_vals_loaded = 1;
   }
 
   // add its address to all_func_memo_info_dict:
@@ -217,11 +241,6 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
 #endif // ENABLE_DEBUG_LOGGING
 
 
-  // Optimization: leave null for now and lazy-load it from
-  // disk when it's first needed
-  my_func_memo_info->memoized_vals_dict = NULL;
-
-
   PyObject* code_dependencies =
     PyDict_GetItemString(serialized_fmi, "code_dependencies");
   if (code_dependencies) {
@@ -230,5 +249,124 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
   }
 
   return my_func_memo_info;
+}
+
+
+/* The on-disk persistent cache corresponding to each function looks
+   like the following:
+
+   Each 'key' is a md5 hash of cPickle.dumps([argument list])
+
+   Each 'value' is a LIST of dicts with the following fields:
+
+     "args" --> argument list
+     "global_vars_read" --> dict mapping global vars to values (OPTIONAL)
+
+     "files_read" --> dict mapping files read to modtimes (OPTIONAL)
+     "files_written" --> dict mapping files written to modtimes (OPTIONAL)
+
+     "retval" --> return value, stored in a SINGLETON list
+                  (to facilitate mutation for COW optimization)
+     "stdout_buf" --> buffered stdout string (OPTIONAL)
+     "stderr_buf" --> buffered stderr string (OPTIONAL)
+     "final_file_seek_pos" --> dict mapping filenames to their seek
+                               positions at function exit time (OPTIONAL)
+
+     "runtime_ms" --> how many milliseconds it took to run
+
+   (the reason why this is a list rather than a single dict is because
+   there could be MULTIPLE valid matches for a particular argument list,
+   due to differing global variable values)
+
+   Each function stores its persistent cache in its own sub-directory:
+
+     incpy-cache/<hash of function name>-cache/
+
+   and each 'value' is in a pickle file named by the key:
+ 
+     incpy-cache/<hash of function name>-cache/<hash of key>.pickle
+
+*/
+
+
+// Retrieves, de-serializes, and returns the entry associated with hash_key
+// in the file (returning NULL if not found or unpickling error)
+PyObject* on_disk_cache_GET(FuncMemoInfo* fmi, PyObject* hash_key) {
+  PyObject* subdir_name = hexdigest_str(GET_CANONICAL_NAME(fmi));
+
+  PyObject* pickle_filename =
+    PyString_FromFormat("incpy-cache/%s-cache/%s.pickle",
+                        PyString_AsString(subdir_name), PyString_AsString(hash_key));
+  PyObject* pf = PyFile_FromString(PyString_AsString(pickle_filename), "r");
+
+  Py_DECREF(pickle_filename);
+  Py_DECREF(subdir_name);
+
+  if (pf) {
+    PyObject* ret = PyObject_CallFunctionObjArgs(cPickle_load_func, pf, NULL);
+    Py_DECREF(pf);
+
+    if (ret) {
+      return ret;
+    }
+    else {
+      assert(PyErr_Occurred());
+      PyErr_Clear();
+      PG_LOG_PRINTF("dict(event='ERROR', what='Cannot unpickle cache entry', funcname='%s')\n",
+                    PyString_AsString(GET_CANONICAL_NAME(fmi)));
+      return NULL;
+    }
+  }
+  else {
+    assert(PyErr_Occurred());
+    PyErr_Clear();
+
+    return NULL;
+  }
+}
+
+
+// returns the result of the pickling attempt (so that caller can
+// error-check in the regular manner)
+PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* contents) {
+  // first create parent directories if they don't yet exist
+  struct stat st;
+  if (stat("incpy-cache", &st) != 0) {
+    mkdir("incpy-cache", 0777);
+  }
+
+  PyObject* subdir_name = hexdigest_str(GET_CANONICAL_NAME(fmi));
+  PyObject* subdir_path =
+    PyString_FromFormat("incpy-cache/%s-cache", PyString_AsString(subdir_name));
+
+  if (stat(PyString_AsString(subdir_path), &st) != 0) {
+    mkdir(PyString_AsString(subdir_path), 0777);
+  }
+
+  PyObject* pickle_filename =
+    PyString_FromFormat("%s/%s.pickle",
+                        PyString_AsString(subdir_path), PyString_AsString(hash_key));
+  PyObject* pickle_outfile = PyFile_FromString(PyString_AsString(pickle_filename), "wb");
+  assert(pickle_outfile);
+
+  PyObject* negative_one = PyInt_FromLong(-1);
+  PyObject* cPickle_dump_res =
+    PyObject_CallFunctionObjArgs(cPickle_dump_func,
+                                 contents,
+                                 pickle_outfile,
+                                 negative_one, NULL);
+
+  Py_DECREF(negative_one);
+  Py_DECREF(pickle_outfile);
+  Py_DECREF(pickle_filename);
+  Py_DECREF(subdir_path);
+  Py_DECREF(subdir_name);
+
+  // For optimization purposes ...
+  if (cPickle_dump_res) {
+    fmi->on_disk_cache_empty = 0;
+  }
+
+  return cPickle_dump_res;
 }
 

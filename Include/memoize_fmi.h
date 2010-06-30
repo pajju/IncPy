@@ -20,41 +20,9 @@ extern "C" {
 // Object that contains the memo table, dependencies, and profiling
 // metadata for one function (only some fields will be serialized to disk)
 typedef struct {
-  // these fields below are serialized to disk
-  // (for efficiency, these are NULL pointers if empty)
-
-  /* 
-
-    Key: cPickle.dumps([argument list])
-
-    Value: a LIST of dicts with the following fields:
-
-      "args" --> argument list
-      "global_vars_read" --> dict mapping global vars to values (OPTIONAL)
-
-      "files_read" --> dict mapping files read to modtimes (OPTIONAL)
-      "files_written" --> dict mapping files written to modtimes (OPTIONAL)
-
-      "retval" --> return value, stored in a SINGLETON list
-                   (to facilitate mutation for COW optimization)
-      "stdout_buf" --> buffered stdout string (OPTIONAL)
-      "stderr_buf" --> buffered stderr string (OPTIONAL)
-      "final_file_seek_pos" --> dict mapping filenames to their seek
-                                positions at function exit time (OPTIONAL)
-
-      "runtime_ms" --> how many milliseconds it took to run
-
-    (the reason why this is a list rather than a single dict is because
-    there could be MULTIPLE valid matches for a particular argument
-    list, due to differing global variable values)
-
-  */
-  PyObject* memoized_vals_dict;       // Dict
-
-  // all of these fields are serialized to disk as:
+  // at the end of execution, these fields are serialized to disk as:
   //   incpy-cache/XXX.dependencies.pickle
-  PyObject* code_dependencies;        // Dict
-
+  PyObject* code_dependencies; // Dict
 
   // these fields below are NOT serialized to disk
 
@@ -65,12 +33,17 @@ typedef struct {
   // booleans
   char is_impure;    // is this function impure during THIS execution?
   char all_code_deps_SAT; // are all code dependencies satisfied during THIS execution?
-  char memoized_vals_loaded; // have we attempted to load memoized_vals from disk yet?
 
   // should we not even bother memoizing this function? (but we still
   // need to track its dependencies) ... only relevant when
   // ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION on
   char likely_nothing_to_memoize;
+
+  // if the incpy-cache/<hash of function name>.cache/ sub-directory doesn't
+  // exist, then the on-disk cache for this function is currently empty,
+  // so no need to check it
+  char on_disk_cache_empty;
+
 
   // how many times has this function been executed and terminated
   // 'quickly' with the memoized_vals field as NULL?  only relevant when
@@ -80,6 +53,11 @@ typedef struct {
 } FuncMemoInfo;
 
 #define GET_CANONICAL_NAME(fmi) ((PyCodeObject*)fmi->f_code)->pg_canonical_name
+
+
+PyObject* on_disk_cache_GET(FuncMemoInfo* fmi, PyObject* hash_key);
+PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* contents);
+
 
 #ifdef __cplusplus
 }

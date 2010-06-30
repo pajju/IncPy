@@ -108,9 +108,9 @@ typedef struct _frame {
     // (Optimization: remain NULL when empty)
     PyObject* stored_args_lst;
 
-    // represents cPickle.dumps(stored_args_lst, protocol=-1)
+    // represents hashlib.md5(cPickle.dumps(stored_args_lst, protocol=-1)).hexdigest()
     // (Optimization: remain NULL when stored_args_lst is null)
-    PyObject* stored_args_lst_pickled_str;
+    PyObject* stored_args_lst_hash;
 
     /* END   - pgbovine new fields */
 
