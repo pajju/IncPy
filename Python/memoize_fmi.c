@@ -260,8 +260,8 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
      "files_read" --> dict mapping files read to modtimes (OPTIONAL)
      "files_written" --> dict mapping files written to modtimes (OPTIONAL)
 
-     "retval" --> return value, stored in a SINGLETON list
-                  (to facilitate mutation for COW optimization)
+     "retval" --> return value
+
      "stdout_buf" --> buffered stdout string (OPTIONAL)
      "stderr_buf" --> buffered stderr string (OPTIONAL)
      "final_file_seek_pos" --> dict mapping filenames to their seek

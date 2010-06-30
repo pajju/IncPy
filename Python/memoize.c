@@ -1902,14 +1902,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         }
 
 
-        // remember that retval is actually a singleton list ...
-        PyObject* memoized_retval_lst = PyDict_GetItemString(elt, "retval");
-        assert(memoized_retval_lst &&
-               PyList_CheckExact(memoized_retval_lst) &&
-               PyList_Size(memoized_retval_lst) == 1);
-
-        memoized_retval = PyList_GET_ITEM(memoized_retval_lst, 0);
-
+        memoized_retval = PyDict_GetItemString(elt, "retval");
         // VERY important to increment its refcount, since
         // memoized_vals_matching_args (its enclosing parent) will be
         // blown away soon!!!
@@ -2262,17 +2255,10 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   assert(memoized_vals_matching_args);
 
-  // Note that the return value will always be a list of exactly ONE
-  // element, but it's a list to facilitate mutation if you do COW
-  // optimization
-  PyObject* retval_lst = PyList_New(1);
-  Py_INCREF(retval); // ugh, stupid refcounts!
-  PyList_SET_ITEM(retval_lst, 0, retval); // this does NOT incref retval
-
   PyObject* memo_table_entry = PyDict_New();
+
   PyDict_SetItemString(memo_table_entry, "args", f->stored_args_lst);
-  PyDict_SetItemString(memo_table_entry, "retval", retval_lst);
-  Py_DECREF(retval_lst);
+  PyDict_SetItemString(memo_table_entry, "retval", retval);
 
   PyObject* runtime_ms_obj = PyInt_FromLong(runtime_ms);
   PyDict_SetItemString(memo_table_entry, "runtime_ms", runtime_ms_obj);
@@ -2404,8 +2390,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
                     PyString_AsString(canonical_name), runtime_ms);
   }
 
-  // TODO: do we still need this?
-  Py_DECREF(retval); // subtle but important for preventing leaks
+
+  //Py_DECREF(retval); // TODO: I DON'T think we need this anymore
 
 
 pg_exit_frame_done:
