@@ -1888,8 +1888,23 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
           PyObject_DelItem(memoized_vals_matching_args, tmp_idx);
           Py_DECREF(tmp_idx);
 
-          // TODO: what should we do about the on-disk version of this
-          // data structure?
+          // update on-disk cache either by writing an update, or
+          // deleting the file if there's nothing left
+          if (PyList_Size(memoized_vals_matching_args) > 0) {
+            PyObject* res =
+              on_disk_cache_PUT(f->func_memo_info, f->stored_args_lst_hash,
+                                memoized_vals_matching_args);
+            if (res) {
+              Py_DECREF(res);
+            }
+            else {
+              assert(PyErr_Occurred());
+              PyErr_Clear();
+            }
+          }
+          else {
+            on_disk_cache_DEL(f->func_memo_info, f->stored_args_lst_hash);
+          }
 
           PG_LOG_PRINTF("dict(event='CLEAR_CACHE_ENTRY', idx=%u, what'%s')\n",
                         (unsigned)memoized_vals_idx,
@@ -1907,11 +1922,11 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
         memoized_retval = PyList_GET_ITEM(memoized_retval_lst, 0);
 
-        // TODO: do we still need to do this???
-
         // VERY important to increment its refcount, since
         // memoized_vals_matching_args (its enclosing parent) will be
         // blown away soon!!!
+        //
+        // TODO: do we still need to do this???
         Py_XINCREF(memoized_retval);
 
         memoized_runtime_ms = PyInt_AsLong(PyDict_GetItemString(elt, "runtime_ms"));

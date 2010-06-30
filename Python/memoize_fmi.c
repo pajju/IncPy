@@ -59,6 +59,11 @@ FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod) {
   PyDict_SetItem(new_fmi->code_dependencies,
                  cod->pg_canonical_name, cur_code_dependency);
 
+  PyObject* subdir_basename = hexdigest_str(GET_CANONICAL_NAME(new_fmi));
+  new_fmi->cache_subdirectory_path =
+    PyString_FromFormat("incpy-cache/%s.cache", PyString_AsString(subdir_basename));
+  Py_DECREF(subdir_basename);
+
   return new_fmi;
 }
 
@@ -75,11 +80,8 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
                 PyString_AsString(GET_CANONICAL_NAME(func_memo_info)));
 
   // erase the entire sub-directory for cache entries associated with func_memo_info
-  PyObject* subdir_name = hexdigest_str(GET_CANONICAL_NAME(func_memo_info));
-  PyObject* subdir_path =
-    PyString_FromFormat("incpy-cache/%s-cache", PyString_AsString(subdir_name));
-
-  char* subdir_path_str = PyString_AsString(subdir_path);
+  assert(func_memo_info->cache_subdirectory_path);
+  char* subdir_path_str = PyString_AsString(func_memo_info->cache_subdirectory_path);
 
   DIR* dp = opendir(subdir_path_str);
   if (dp) {
@@ -94,10 +96,8 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
     rmdir(subdir_path_str);
     closedir(dp);
   }
- 
-  Py_DECREF(subdir_path);
-  Py_DECREF(subdir_name);
 
+  func_memo_info->on_disk_cache_empty = 1;
 
   Py_CLEAR(func_memo_info->code_dependencies);
 
@@ -164,15 +164,10 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
       my_func_memo_info = deserialize_func_memo_info(serialized_func_memo_info, cod);
       Py_DECREF(serialized_func_memo_info);
 
-      PyObject* cache_subdir_path =
-        PyString_FromFormat("incpy-cache/%s-cache", PyString_AsString(basename));
-
       struct stat st;
-      if (stat(PyString_AsString(cache_subdir_path), &st) != 0) {
+      if (stat(PyString_AsString(my_func_memo_info->cache_subdirectory_path), &st) != 0) {
         my_func_memo_info->on_disk_cache_empty = 1;
       }
-
-      Py_DECREF(cache_subdir_path);
     }
 
     Py_DECREF(pf);
@@ -280,11 +275,11 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
 
    Each function stores its persistent cache in its own sub-directory:
 
-     incpy-cache/<hash of function name>-cache/
+     incpy-cache/<hash of function name>.cache/
 
    and each 'value' is in a pickle file named by the key:
  
-     incpy-cache/<hash of function name>-cache/<hash of key>.pickle
+     incpy-cache/<hash of function name>.cache/<hash of key>.pickle
 
 */
 
@@ -292,15 +287,16 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
 // Retrieves, de-serializes, and returns the entry associated with hash_key
 // in the file (returning NULL if not found or unpickling error)
 PyObject* on_disk_cache_GET(FuncMemoInfo* fmi, PyObject* hash_key) {
-  PyObject* subdir_name = hexdigest_str(GET_CANONICAL_NAME(fmi));
+  assert(hash_key);
+  assert(fmi->cache_subdirectory_path);
 
   PyObject* pickle_filename =
-    PyString_FromFormat("incpy-cache/%s-cache/%s.pickle",
-                        PyString_AsString(subdir_name), PyString_AsString(hash_key));
+    PyString_FromFormat("%s/%s.pickle",
+                        PyString_AsString(fmi->cache_subdirectory_path),
+                        PyString_AsString(hash_key));
   PyObject* pf = PyFile_FromString(PyString_AsString(pickle_filename), "r");
 
   Py_DECREF(pickle_filename);
-  Py_DECREF(subdir_name);
 
   if (pf) {
     PyObject* ret = PyObject_CallFunctionObjArgs(cPickle_load_func, pf, NULL);
@@ -329,23 +325,24 @@ PyObject* on_disk_cache_GET(FuncMemoInfo* fmi, PyObject* hash_key) {
 // returns the result of the pickling attempt (so that caller can
 // error-check in the regular manner)
 PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* contents) {
+  assert(hash_key);
+  assert(fmi->cache_subdirectory_path);
+  char* subdir_path_str = PyString_AsString(fmi->cache_subdirectory_path);
+
   // first create parent directories if they don't yet exist
   struct stat st;
   if (stat("incpy-cache", &st) != 0) {
     mkdir("incpy-cache", 0777);
   }
 
-  PyObject* subdir_name = hexdigest_str(GET_CANONICAL_NAME(fmi));
-  PyObject* subdir_path =
-    PyString_FromFormat("incpy-cache/%s-cache", PyString_AsString(subdir_name));
-
-  if (stat(PyString_AsString(subdir_path), &st) != 0) {
-    mkdir(PyString_AsString(subdir_path), 0777);
+  if (stat(subdir_path_str, &st) != 0) {
+    mkdir(subdir_path_str, 0777);
   }
 
   PyObject* pickle_filename =
     PyString_FromFormat("%s/%s.pickle",
-                        PyString_AsString(subdir_path), PyString_AsString(hash_key));
+                        subdir_path_str,
+                        PyString_AsString(hash_key));
   PyObject* pickle_outfile = PyFile_FromString(PyString_AsString(pickle_filename), "wb");
   assert(pickle_outfile);
 
@@ -359,8 +356,6 @@ PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* con
   Py_DECREF(negative_one);
   Py_DECREF(pickle_outfile);
   Py_DECREF(pickle_filename);
-  Py_DECREF(subdir_path);
-  Py_DECREF(subdir_name);
 
   // For optimization purposes ...
   if (cPickle_dump_res) {
@@ -370,3 +365,25 @@ PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* con
   return cPickle_dump_res;
 }
 
+void on_disk_cache_DEL(FuncMemoInfo* fmi, PyObject* hash_key) {
+  assert(hash_key);
+  assert(fmi->cache_subdirectory_path);
+  char* subdir_path_str = PyString_AsString(fmi->cache_subdirectory_path);
+
+  PyObject* pickle_filename =
+    PyString_FromFormat("%s/%s.pickle",
+                        subdir_path_str,
+                        PyString_AsString(hash_key));
+
+  unlink(PyString_AsString(pickle_filename));
+  Py_DECREF(pickle_filename);
+
+  // if rmdir succeeds, then that means that there were NO other cache
+  // entries left in the directory, so fmi->on_disk_cache_empty should
+  // be set
+  rmdir(subdir_path_str);
+  struct stat st;
+  if (stat(subdir_path_str, &st) != 0) {
+      fmi->on_disk_cache_empty = 1;
+  }
+}

@@ -21,7 +21,7 @@ extern "C" {
 // metadata for one function (only some fields will be serialized to disk)
 typedef struct {
   // at the end of execution, these fields are serialized to disk as:
-  //   incpy-cache/XXX.dependencies.pickle
+  //   incpy-cache/<hash of canonical name>.dependencies.pickle
   PyObject* code_dependencies; // Dict
 
   // these fields below are NOT serialized to disk
@@ -29,6 +29,10 @@ typedef struct {
   PyObject* f_code; // PyCodeObject that contains the function's
                     // canonical name as pg_canonical_name
                     // (see GET_CANONICAL_NAME macro below)
+
+  // PyString representing the relative path to the sub-directory where
+  // this function's cache entries reside
+  PyObject* cache_subdirectory_path;
 
   // booleans
   char is_impure;    // is this function impure during THIS execution?
@@ -57,6 +61,7 @@ typedef struct {
 
 PyObject* on_disk_cache_GET(FuncMemoInfo* fmi, PyObject* hash_key);
 PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* contents);
+void on_disk_cache_DEL(FuncMemoInfo* fmi, PyObject* hash_key);
 
 
 #ifdef __cplusplus
