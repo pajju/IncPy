@@ -358,8 +358,6 @@ PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* con
                         PyString_AsString(hash_key));
   PyObject* pickle_outfile = PyFile_FromString(PyString_AsString(pickle_filename), "wb");
   assert(pickle_outfile);
-  Py_DECREF(pickle_filename);
-
   PyObject* negative_one = PyInt_FromLong(-1);
   PyObject* cPickle_dump_res =
     PyObject_CallFunctionObjArgs(cPickle_dump_func,
@@ -374,6 +372,13 @@ PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* con
   if (cPickle_dump_res) {
     fmi->on_disk_cache_empty = 0;
   }
+  else {
+    // if the PUT failed, then just to be safe, delete the file so that
+    // we don't try to unpickle an inconsistent file
+    unlink(PyString_AsString(pickle_filename));
+  }
+
+  Py_DECREF(pickle_filename);
 
   return cPickle_dump_res;
 }
@@ -403,4 +408,3 @@ void on_disk_cache_DEL(FuncMemoInfo* fmi, PyObject* hash_key) {
       fmi->on_disk_cache_empty = 1;
   }
 }
-
