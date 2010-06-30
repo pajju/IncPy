@@ -295,6 +295,11 @@ PyObject* on_disk_cache_GET(FuncMemoInfo* fmi, PyObject* hash_key) {
   assert(hash_key);
   assert(fmi->cache_subdirectory_path);
 
+  // Optimization:
+  if (fmi->on_disk_cache_empty) {
+    return NULL;
+  }
+
   PyObject* pickle_filename =
     PyString_FromFormat("%s/%s.pickle",
                         PyString_AsString(fmi->cache_subdirectory_path),

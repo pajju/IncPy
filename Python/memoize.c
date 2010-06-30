@@ -1649,6 +1649,16 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   // by now, all code dependencies are still satisfied ...
 
+
+  // populate stored_args_lst
+
+  /* We can now use co_argcount to figure out how many parameters are
+     passed on the top of the stack.  By this point, the top of the
+     stack should be populated with passed-in parameter values.  All the
+     grossness of keyword and default arguments have been resolved at
+     this point, yay!
+
+     TODO: I haven't tested support for varargs yet */
   f->stored_args_lst = PyList_New(f->f_code->co_argcount);
 
   Py_ssize_t i;
@@ -1668,6 +1678,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
       Py_INCREF(elt);
     }
   }
+
 
   PyObject* memoized_retval = NULL;
   PyObject* memoized_stdout_buf = NULL;
@@ -1884,7 +1895,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         break; // break out of this loop, we've found the first (should be ONLY) match!
       }
 
-      Py_DECREF(memoized_vals_matching_args); // we don't need this anymore!
+      // we don't need to keep this around anymore!
+      Py_DECREF(memoized_vals_matching_args);
     }
   }
 
@@ -1975,37 +1987,16 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 // only reach here if you actually call the function, NOT if you skip it:
 pg_enter_frame_done:
 
+  // Track reachability from arguments ...
+  //
   // Optimization: we only need to do this for functions that stand some
   // chance of being memoized (or else it's pointless to do so)
   if (f->func_memo_info &&
       !f->func_memo_info->is_impure &&
       !f->func_memo_info->likely_nothing_to_memoize) {
-
-    /* We can now use co_argcount to figure out how many parameters are
-       passed on the top of the stack.  By this point, the top of the
-       stack should be populated with passed-in parameter values.  All the
-       grossness of keyword and default arguments have been resolved at
-       this point, yay!
-
-       TODO: I haven't tested support for varargs yet */
-    f->stored_args_lst = PyList_New(f->f_code->co_argcount);
-
     Py_ssize_t i;
     for (i = 0; i < f->f_code->co_argcount; i++) {
       PyObject* elt = f->f_localsplus[i];
-
-      // create a proxy object at the BEGINNING of the call if
-      // possible, so that we can properly capture the file offset
-      // at the beginning of the call via file_tell()
-      PyObject* proxy = create_proxy_object(elt);
-      if (proxy) {
-        PyList_SET_ITEM(f->stored_args_lst, i, proxy);
-        // no need to Py_INCREF, since create_proxy_object creates a new object
-      }
-      else {
-        PyList_SET_ITEM(f->stored_args_lst, i, elt);
-        Py_INCREF(elt);
-      }
 
       unsigned int arg_reachable_func_start_time = get_arg_reachable_func_start_time(elt);
 
@@ -2211,7 +2202,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   // now memoize results ...
 
-  // initialize empty list if one doesn't already exist:
   memoized_vals_matching_args =
     on_disk_cache_GET(my_func_memo_info, f->stored_args_lst_hash);
 
@@ -2331,7 +2321,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   Py_DECREF(memo_table_entry);
 
 
-  // save the ENTIRE memoized_vals_matching_args on disk:
+  // save the ENTIRE memoized_vals_matching_args to disk:
   PyObject* cPickle_dump_res =
     on_disk_cache_PUT(my_func_memo_info,
                       f->stored_args_lst_hash, memoized_vals_matching_args);
@@ -2361,6 +2351,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
 
 pg_exit_frame_done:
+  // clear this sucker no matter what, since we DON'T want to keep it
+  // around any longer after we've memoized it to disk
   Py_XDECREF(memoized_vals_matching_args);
 
 #ifdef ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION
