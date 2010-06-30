@@ -14,7 +14,6 @@
 #include "memoize_logging.h"
 #include "memoize_profiling.h"
 #include "memoize_codedep.h"
-#include "memoize_pickle.h"
 #include "memoize_reachability.h"
 
 #include "dictobject.h"

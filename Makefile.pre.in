@@ -259,7 +259,6 @@ PYTHON_OBJS=	\
 		Python/memoize.o \
 		Python/memoize_fmi.o \
 		Python/memoize_codedep.o \
-		Python/memoize_pickle.o \
 		Python/memoize_reachability.o \
 		Python/compile.o \
 		Python/codecs.o \
@@ -606,7 +605,6 @@ PYTHON_HEADERS= \
 		Include/memoize_logging.h \
 		Include/memoize_profiling.h \
 		Include/memoize_codedep.h \
-		Include/memoize_pickle.h \
 		Include/memoize_reachability.h \
 		Include/classobject.h \
 		Include/cobject.h \

@@ -25,6 +25,39 @@ extern "C" {
 #define PYPRINT(obj) do {PyObject_Print(obj, stdout, 0); printf("\n");} while(0)
 
 
+// use *_CheckExact for speed ...
+
+// ORDER MATTERS for short-circuiting ... put the most commonly-occuring
+// ones first ...
+#define DEFINITELY_PICKLABLE(obj) \
+  ((obj == Py_None) || \
+   PyString_CheckExact(obj) || \
+   PyInt_CheckExact(obj) || \
+   PyLong_CheckExact(obj) || \
+   PyBool_Check(obj) || \
+   PyComplex_CheckExact(obj) || \
+   PyFloat_CheckExact(obj) || \
+   PyUnicode_CheckExact(obj))
+
+
+// TODO: In theory, each of these types could be traceable by replacing
+// them with proxies, but I don't want to put in that work unless there
+// is demand for it.  e.g., create code dependencies for function
+// objects, and file dependencies for module objects, etc.
+//
+// ORDER MATTERS for short-circuiting ... put the most commonly-occuring
+// ones first ...
+#define DEFINITELY_NOT_PICKLABLE(val) \
+  (PyModule_CheckExact(val) || \
+   PyFunction_Check(val) || \
+   PyCFunction_Check(val) || \
+   PyMethod_Check(val) || \
+   PyType_CheckExact(val) || \
+   PyClass_Check(val) || \
+   PyFile_CheckExact(val))
+
+
+
 // initialize in pg_initialize(), destroy in pg_finalize()
 PyObject* all_func_memo_info_dict;
 PyObject* func_name_to_code_dependency;
