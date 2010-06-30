@@ -66,7 +66,6 @@ PyObject* cPickle_dumpstr_func;
 PyObject* cPickle_dump_func;
 PyObject* cPickle_load_func;
 
-PyObject* deepcopy(PyObject* obj);
 PyObject* hexdigest_str(PyObject* s);
 
 int obj_equals(PyObject* obj1, PyObject* obj2);

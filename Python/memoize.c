@@ -202,10 +202,8 @@ static FILE* user_log_file = NULL;
 
 // References to Python standard library functions:
 
-static PyObject* deepcopy_func = NULL;        // copy.deepcopy
 PyObject* cPickle_load_func = NULL;           // cPickle.load
 PyObject* cPickle_dumpstr_func = NULL;        // cPickle.dumps
-
 PyObject* cPickle_dump_func = NULL;           // cPickle.dump
 static PyObject* hashlib_md5_func = NULL;     // hashlib.md5
 
@@ -659,30 +657,6 @@ static PyObject* create_proxy_object(PyObject* obj) {
   }
 
   return NULL;
-}
-
-
-
-// make a deep copy of obj and return it as a new reference
-// (returns NULL on error)
-PyObject* deepcopy(PyObject* obj) {
-  assert(deepcopy_func);
-  PyObject* ret = PyObject_CallFunctionObjArgs(deepcopy_func, obj, NULL);
-
-  // if we failed, then try to see if we can find a copy() method,
-  // and if so, try to use that instead.  (e.g., NumPy arrays and
-  // matrices have their own copy methods)
-  //
-  // hmmm, we seem to do fine without this for now ... put it back in when we need it:
-  /*
-  if (!ret && PyObject_HasAttrString(obj, "copy")) {
-    assert(PyErr_Occurred());
-    PyErr_Clear();
-    ret = PyObject_CallMethod(obj, "copy", NULL);
-  }
-  */
-
-  return ret;
 }
 
 
@@ -1185,13 +1159,6 @@ memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
 #endif
 
   // import some useful Python modules, so that we can call their functions:
-
-  PyObject* copy_module = PyImport_ImportModule("copy"); // increments refcount
-  assert(copy_module);
-  deepcopy_func = PyObject_GetAttrString(copy_module, "deepcopy");
-  Py_DECREF(copy_module);
-  assert(deepcopy_func);
-
   PyObject* cPickle_module = PyImport_ImportModule("cPickle"); // increments refcount
 
   // this is the first C extension module we're trying to import, so do
@@ -1503,7 +1470,6 @@ void pg_finalize() {
   Py_CLEAR(ignore_paths_lst);
 
   // function pointers
-  Py_CLEAR(deepcopy_func);
   Py_CLEAR(cPickle_dumpstr_func);
   Py_CLEAR(cPickle_dump_func);
   Py_CLEAR(cPickle_load_func);
