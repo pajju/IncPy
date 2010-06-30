@@ -11,7 +11,6 @@
 
 #include "memoize.h"
 #include "memoize_fmi.h"
-#include "memoize_COW.h"
 #include "memoize_logging.h"
 #include "memoize_profiling.h"
 #include "memoize_codedep.h"
@@ -222,9 +221,8 @@ static PyObject* numpy_module = NULL;
 // forward declarations:
 static void mark_impure(PyFrameObject* f, char* why);
 static void mark_entire_stack_impure(char* why);
-static void deepcopy_and_add_global_read(PyObject* varname,
-                                         PyObject* value,
-                                         PyObject* output_dict);
+static void add_global_read(PyObject* varname, PyObject* value,
+                            PyObject* output_dict);
 static void add_file_dependency(PyObject* filename, PyObject* output_dict);
 
 // from Objects/fileobject.c
@@ -1379,8 +1377,6 @@ memset(level_1_map, 0, sizeof(*level_1_map) * METADATA_MAP_SIZE);
   func_name_to_code_dependency = PyDict_New();
   func_name_to_code_object = PyDict_New();
   all_func_memo_info_dict = PyDict_New();
-  cow_containment_dict = PyDict_New();
-  cow_traced_addresses_set = PySet_New(NULL);
 
 
   char time_buf[100];
@@ -1470,9 +1466,8 @@ void pg_finalize() {
                                    deps_outfile,
                                    negative_one, NULL);
 
-    // note that pickling might still fail if there's something inside
-    // of serialized_deps that's not picklable (sadly, our
-    // is_picklable() implementation doesn't pick up everything)
+    // note that pickling might still fail if something inside
+    // of serialized_deps isn't picklable
     if (cPickle_dump_res) {
       Py_DECREF(cPickle_dump_res);
     }
@@ -1506,8 +1501,6 @@ void pg_finalize() {
   Py_CLEAR(global_containment_intern_cache);
   Py_CLEAR(func_name_to_code_dependency);
   Py_CLEAR(func_name_to_code_object);
-  Py_CLEAR(cow_containment_dict);
-  Py_CLEAR(cow_traced_addresses_set);
   Py_CLEAR(ignore_paths_lst);
 
   // function pointers
@@ -1940,31 +1933,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   // woohoo, success!  you've avoided re-executing the function!
   if (memoized_retval) {
     assert(Py_REFCNT(memoized_retval) > 0);
-    PyObject* memoized_retval_copy = NULL;
-
-    // very subtle and important ... make a DEEP COPY of memoized_retval
-    // and return the copy to the caller.  See this test for why
-    // we need to return a copy:
-    //
-    //   IncPy-regression-tests/cow_func_retval/
-#ifdef ENABLE_COW
-    // defer the deepcopy until elt has been mutated
-    memoized_retval_copy = memoized_retval;
-    cow_containment_dict_ADD(memoized_retval);
-#else
-    // eagerly make the deepcopy NOW!
-    // this has a refcount of 1 ... might cause a memory leak
-    memoized_retval_copy = deepcopy(memoized_retval);
- 
-    if (!memoized_retval_copy) {
-      assert(PyErr_Occurred());
-      // we can't keep going, since memoized_retval_copy is NULL
-      // TODO: deal with this gracefully in the future rather than failing hard ...
-      PyErr_Print();
-      Py_Exit(1);
-    }
-#endif // ENABLE_COW
-
 
     // if found, print memoized buffers to stdout/stderr
     // and also append them to the buffers of all of your callers
@@ -2041,10 +2009,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
                     memo_lookup_time_ms,
                     memoized_runtime_ms);
 
-    assert(Py_REFCNT(memoized_retval_copy) > 0);
-
     MEMOIZE_PUBLIC_END()
-    return memoized_retval_copy; // remember to return a COPY to caller
+    return memoized_retval;
   }
 
 
@@ -2285,37 +2251,6 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   assert(f->stored_args_lst_hash);
 
-  // we don't need to deep-copy the arguments (since we simply use them
-  // to do value MATCHING), but we DO need to deep-copy the return value
-  // (since otherwise we might run into aliasing issues)
-  PyObject* retval_copy = NULL;
-
-#ifdef ENABLE_COW
-  // defer the deepcopy until elt has been mutated
-  retval_copy = retval;
-  Py_INCREF(retval_copy); // always incref to match what happens in deepcopy_func
-  cow_containment_dict_ADD(retval);
-#else
-  // eagerly make the deepcopy NOW!
-  retval_copy = deepcopy(retval);
-
-  if (!retval_copy) {
-    assert(PyErr_Occurred());
-    PyErr_Clear();
-  }
-#endif // ENABLE_COW
-
-  if (retval_copy == NULL) {
-    PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Return value of %s cannot be deep-copied')\n",
-                  PyString_AsString(canonical_name));
-    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | return value cannot be deep-copied | runtime %ld ms\n",
-                    PyString_AsString(canonical_name), runtime_ms);
-    goto pg_exit_frame_done;
-  }
-
-  assert(Py_REFCNT(retval_copy) > 0);
-
-
   // now memoize results ...
 
   // initialize empty list if one doesn't already exist:
@@ -2332,8 +2267,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   // element, but it's a list to facilitate mutation if you do COW
   // optimization
   PyObject* retval_lst = PyList_New(1);
-  Py_INCREF(retval_copy); // ugh, stupid refcounts!
-  PyList_SET_ITEM(retval_lst, 0, retval_copy); // this does NOT incref retval_copy
+  Py_INCREF(retval); // ugh, stupid refcounts!
+  PyList_SET_ITEM(retval_lst, 0, retval); // this does NOT incref retval
 
   PyObject* memo_table_entry = PyDict_New();
   PyDict_SetItemString(memo_table_entry, "args", f->stored_args_lst);
@@ -2368,7 +2303,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       PyObject* val = find_globally_reachable_obj_by_name(global_varname_tuple, f);
 
       if (val) {
-        deepcopy_and_add_global_read(global_varname_tuple, val, global_vars_read);
+        add_global_read(global_varname_tuple, val, global_vars_read);
       }
       else {
 #ifdef ENABLE_DEBUG_LOGGING
@@ -2470,7 +2405,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
                     PyString_AsString(canonical_name), runtime_ms);
   }
 
-  Py_DECREF(retval_copy); // subtle but important for preventing leaks
+  // TODO: do we still need this?
+  Py_DECREF(retval); // subtle but important for preventing leaks
 
 
 pg_exit_frame_done:
@@ -2496,15 +2432,14 @@ pg_exit_frame_done:
 }
 
 
-// Perform: output_dict[varname] = deepcopy(value)
+// Perform: output_dict[varname] = value
 //
 // (punting on values that cannot be safely pickled)
 //
 //   varname can be munged by find_globally_reachable_obj_by_name()
 //   (it's either a string or a tuple of strings)
-static void deepcopy_and_add_global_read(PyObject* varname,
-                                         PyObject* value,
-                                         PyObject* output_dict) {
+static void add_global_read(PyObject* varname, PyObject* value,
+                            PyObject* output_dict) {
   // quick-check since a lot of passed-in values are modules,
   // which are NOT picklable ... seems to speed things up slightly
   if (PyModule_CheckExact(value)) {
@@ -2517,10 +2452,7 @@ static void deepcopy_and_add_global_read(PyObject* varname,
      possibly MATCH THEM UP with their original incarnations once we
      load the memoized values from disk (the version loaded from disk
      will be a different object than the one in memory, so '==' will
-     ALWAYS FAIL if a comparison method isn't implemented)
-
-     for speed purposes, do this BEFORE checking for is_picklable() since
-     has_comparison_method() is much faster! */
+     ALWAYS FAIL if a comparison method isn't implemented) */
   if (!has_comparison_method(value)) {
 
 #ifdef ENABLE_DEBUG_LOGGING
@@ -2534,61 +2466,7 @@ static void deepcopy_and_add_global_read(PyObject* varname,
     return;
   }
 
-
-  // don't bother storing these values, since they're
-  // probably immutable anyhow (and can't be pickled)
-  // (this check can be rather slow, so avoid doing it if possible)
-  if (!is_picklable(value)) {
-
-#ifdef ENABLE_DEBUG_LOGGING
-    // to prevent excessive log noise, only print out a warning 
-    // for types that aren't DEFINITELY_NOT_PICKLABLE:
-    if (!DEFINITELY_NOT_PICKLABLE(value)) {
-      PyObject* tmp_str = PyObject_Repr(varname);
-      char* varname_str = PyString_AsString(tmp_str);
-      PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot track unpicklable global var', varname=\"%s\", type='%s')\n",
-                    varname_str, Py_TYPE(value)->tp_name);
-      Py_DECREF(tmp_str);
-    }
-#endif // ENABLE_DEBUG_LOGGING
-
-    return;
-  }
-
-
-#ifdef ENABLE_COW
-  // defer the deepcopy until value has been mutated
-  PyObject* global_val_copy = value;
-  Py_INCREF(global_val_copy); // always incref to match what happens in deepcopy_func
-  cow_containment_dict_ADD(value);
-
-#else
-  // deepcopy value before storing it into global_var_dependencies
-	PyObject* global_val_copy = deepcopy(value);
-#endif // ENABLE_COW
-
-  // if the deepcopy was successful, add it to output_dict
-  if (global_val_copy) {
-    assert(Py_REFCNT(global_val_copy) > 0);
-    PyDict_SetItem(output_dict, varname, global_val_copy); // this DOES incref global_val_copy
-    Py_DECREF(global_val_copy); // necessary to prevent leaks
-  }
-  // Otherwise, if the deepcopy failed, log a warning and punt for now.
-  // This is a potential source of unsoundness, since we can't detect 
-  // changes in values that we don't track
-  //
-  // TODO: a conservative alternative is just to mark the entire
-  // stack impure whenever an unsoundness warning is issued
-  else {
-#ifdef ENABLE_DEBUG_LOGGING
-    PyObject* tmp_str = PyObject_Repr(varname);
-    PG_LOG_PRINTF("dict(event='WARNING', what='UNSOUNDNESS', why='Cannot deepcopy global var', varname='%s', type='%s')\n", PyString_AsString(tmp_str), Py_TYPE(value)->tp_name);
-    Py_DECREF(tmp_str);
-#endif // ENABLE_DEBUG_LOGGING
-
-    assert(PyErr_Occurred());
-    PyErr_Clear();
-  }
+  PyDict_SetItem(output_dict, varname, value);
 }
 
 // Perform: output_dict[filename] = last_modification_time(File(filename))
@@ -2860,11 +2738,6 @@ void pg_about_to_MUTATE_event(PyObject *object) {
       }
     }
   }
-
-#ifdef ENABLE_COW
-  // TODO: this occurs on EVERY mutation event, so it might be slow
-  check_COW_mutation(object);
-#endif
 
   MEMOIZE_PUBLIC_END()
 }

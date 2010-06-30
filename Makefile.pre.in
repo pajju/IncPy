@@ -258,7 +258,6 @@ PYTHON_OBJS=	\
 		Python/ceval.o \
 		Python/memoize.o \
 		Python/memoize_fmi.o \
-		Python/memoize_COW.o \
 		Python/memoize_codedep.o \
 		Python/memoize_pickle.o \
 		Python/memoize_reachability.o \
@@ -604,7 +603,6 @@ PYTHON_HEADERS= \
 		Include/ceval.h \
 		Include/memoize.h \
 		Include/memoize_fmi.h \
-		Include/memoize_COW.h \
 		Include/memoize_logging.h \
 		Include/memoize_profiling.h \
 		Include/memoize_codedep.h \
