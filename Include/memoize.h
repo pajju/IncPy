@@ -53,7 +53,8 @@ extern "C" {
    PyMethod_Check(val) || \
    PyType_CheckExact(val) || \
    PyClass_Check(val) || \
-   PyFile_CheckExact(val))
+   PyFile_CheckExact(val) || \
+   (strcmp(Py_TYPE(val)->tp_name, "sqlite3.Cursor") == 0))
 
 
 // initialize in pg_initialize(), destroy in pg_finalize()
