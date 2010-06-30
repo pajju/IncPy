@@ -29,7 +29,7 @@ extern "C" {
 
 // ORDER MATTERS for short-circuiting ... put the most commonly-occuring
 // ones first ...
-#define DEFINITELY_PICKLABLE(obj) \
+#define IS_PRIMITIVE_TYPE(obj) \
   ((obj == Py_None) || \
    PyString_CheckExact(obj) || \
    PyInt_CheckExact(obj) || \
@@ -40,14 +40,13 @@ extern "C" {
    PyUnicode_CheckExact(obj))
 
 
-// TODO: In theory, each of these types could be traceable by replacing
-// them with proxies, but I don't want to put in that work unless there
-// is demand for it.  e.g., create code dependencies for function
-// objects, and file dependencies for module objects, etc.
+// don't try to pickle values of these types for return values and
+// global vars since it's hard to restore their state on a future
+// execution
 //
 // ORDER MATTERS for short-circuiting ... put the most commonly-occuring
 // ones first ...
-#define DEFINITELY_NOT_PICKLABLE(val) \
+#define NEVER_PICKLE(val) \
   (PyModule_CheckExact(val) || \
    PyFunction_Check(val) || \
    PyCFunction_Check(val) || \
@@ -55,7 +54,6 @@ extern "C" {
    PyType_CheckExact(val) || \
    PyClass_Check(val) || \
    PyFile_CheckExact(val))
-
 
 
 // initialize in pg_initialize(), destroy in pg_finalize()

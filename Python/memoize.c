@@ -665,10 +665,9 @@ static PyObject* create_proxy_object(PyObject* obj) {
    from disk will be a different object than the one in memory, so '=='
    will ALWAYS FAIL, even if they are semantically equal */
 static int has_comparison_method(PyObject* elt) {
-  // this is sort of abusing this macro, but all of these primitive
-  // picklable types should pass with flying colors, even if they don't
-  // explicitly implement a comparison method
-  if (DEFINITELY_PICKLABLE(elt)) {
+  // all of these primitive picklable types should pass with flying colors,
+  // even if they don't explicitly implement a comparison method
+  if (IS_PRIMITIVE_TYPE(elt)) {
     return 1;
   }
   // instance objects always have tp_compare and tp_richcompare
@@ -2154,13 +2153,22 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   }
 
 
-  /* Because we make deep copies of return values when we memoize them,
-     we should NOT memoize return values when they contain within them
+  /* We should NOT memoize return values when they contain within them
      mutable values that are externally-accessible, since if we break 
-     the aliasing relation, we risk losing correctness. */
+     the aliasing relation, we risk a mismatch with expected behavior. */
   if (contains_externally_aliased_mutable_obj(retval, f)) {
     PG_LOG("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Return value contains externally-aliased mutable object')");
     USER_LOG_PRINTF("CANNOT_MEMOIZE %s | returning externally-aliased mutable object | runtime %ld ms\n",
+                    PyString_AsString(canonical_name), runtime_ms);
+    goto pg_exit_frame_done;
+  }
+
+  // don't memoize functions returning funky types that can't be safely
+  // pickled (e.g., file handles act weird when pickled)
+  if (NEVER_PICKLE(retval)) {
+    PG_LOG_PRINTF("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Return value not safe to pickle', funcname='%s')\n",
+                  PyString_AsString(canonical_name));
+    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | return value not safe to pickle | runtime %ld ms\n",
                     PyString_AsString(canonical_name), runtime_ms);
     goto pg_exit_frame_done;
   }
@@ -2191,7 +2199,8 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   }
 
 
-  // populate f->stored_args_lst_hash by taking a hash of argument list values:
+  // if we haven't yet done it, populate f->stored_args_lst_hash by
+  // taking a hash of argument list values:
   if (!f->stored_args_lst_hash) {
     // pass in -1 to force cPickle to use a binary protocol
     PyObject* negative_one = PyInt_FromLong(-1);
@@ -2397,16 +2406,13 @@ pg_exit_frame_done:
 
 
 // Perform: output_dict[varname] = value
-//
-// (punting on values that cannot be safely pickled)
+// (punting on values that cannot be safely or sensibly pickled)
 //
 //   varname can be munged by find_globally_reachable_obj_by_name()
 //   (it's either a string or a tuple of strings)
 static void add_global_read(PyObject* varname, PyObject* value,
                             PyObject* output_dict) {
-  // quick-check since a lot of passed-in values are modules,
-  // which are NOT picklable ... seems to speed things up slightly
-  if (PyModule_CheckExact(value)) {
+  if (NEVER_PICKLE(value)) {
     return;
   }
 

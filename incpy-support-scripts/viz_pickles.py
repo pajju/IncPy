@@ -11,7 +11,6 @@ import hashlib
 def render_dependencies(fmi):
   canonical_name = fmi['canonical_name']
   print '===', canonical_name, '==='
-  print
 
   code_deps = fmi['code_dependencies']
   if len(code_deps) > 1:
@@ -20,13 +19,11 @@ def render_dependencies(fmi):
       if func_name != canonical_name:
         print ' ', func_name
     print
+  print
 
 
-# render one memoized_vals 'object', which is a dict
-def render_memoized_vals(memoized_vals):
-  print 'Memoized vals:'
-  for (i, e) in enumerate(memoized_vals):
-    print
+def render_memo_table_entry_lst(memo_table_lst):
+  for e in memo_table_lst:
     print '  ~~~', e['runtime_ms'], 'ms ~~~'
     print '  Args:', e['args']
 
@@ -39,8 +36,6 @@ def render_memoized_vals(memoized_vals):
       pass
 
     retval = e['retval']
-    assert len(retval) == 1 # retval is formatted as a singleton list
-    retval = retval[0]
     print '  Return value:', retval
 
     if 'stdout_buf' in e:
@@ -55,7 +50,6 @@ def render_memoized_vals(memoized_vals):
         print '  stderr_buf:', stderr_repr[:50], '< %d total chars >' % len(stderr_repr)
       else:
         print '  stderr_buf:', stderr_repr
-    print
     try:
       file_read_dependencies = e['files_read']
       print '  Files read:', ','.join(sorted(file_read_dependencies.keys()))
@@ -74,6 +68,8 @@ def render_memoized_vals(memoized_vals):
     except KeyError:
       pass
 
+    print
+
 
 def main(argv=None):
   if not argv: argv = sys.argv
@@ -81,19 +77,21 @@ def main(argv=None):
   assert os.path.isdir(dirname)
 
   incpy_cache_dir = os.path.join(dirname, 'incpy-cache')
-  files_with_memoized_vals = [e for e in os.listdir(incpy_cache_dir) if 'memoized_vals' in e]
+  function_cache_dirs = [e for e in os.listdir(incpy_cache_dir) if e.endswith('.cache')]
 
-  for f in files_with_memoized_vals:
-    (base, mv, pk) = f.split('.')
-    assert mv == 'memoized_vals'
-    assert pk == 'pickle'
-    deps_filename = base + '.dependencies.pickle'
-    assert os.path.isfile(os.path.join(incpy_cache_dir, deps_filename))
-    deps = cPickle.load(open(os.path.join(incpy_cache_dir, deps_filename)))
-    memoized_vals = cPickle.load(open(os.path.join(incpy_cache_dir, f)))
+  for d in function_cache_dirs:
+    basename = d.split('.')[0]
+    dependencies_file = os.path.join(incpy_cache_dir, basename + '.dependencies.pickle')
+    assert os.path.isfile(dependencies_file)
+    deps = cPickle.load(open(dependencies_file))
     render_dependencies(deps)
-    render_memoized_vals(memoized_vals)
-    print
+
+    cache_dir_path = os.path.join(incpy_cache_dir, d)
+    assert os.path.isdir(cache_dir_path)
+    for memo_table_entry_pickle in os.listdir(cache_dir_path):
+      p = os.path.join(cache_dir_path, memo_table_entry_pickle)
+      memo_table_entry_lst = cPickle.load(open(p))
+      render_memo_table_entry_lst(memo_table_entry_lst)
 
   return 0
 
