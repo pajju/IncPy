@@ -264,11 +264,16 @@ PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* con
     mkdir(subdir_path_str, 0777);
   }
 
-  PyObject* pickle_filename =
-    PyString_FromFormat("%s/%s.pickle",
+  // write to a temporary filename, then atomically rename it
+  // to its proper filename when pickling successfully completed,
+  // so that .pickle files are ALWAYS seen in a consistent state
+  PyObject* pickle_tmp_filename =
+    PyString_FromFormat("%s/%s.pickle.partial",
                         subdir_path_str,
                         PyString_AsString(hash_key));
-  PyObject* pickle_outfile = PyFile_FromString(PyString_AsString(pickle_filename), "wb");
+
+  PyObject* pickle_outfile =
+    PyFile_FromString(PyString_AsString(pickle_tmp_filename), "wb");
   assert(pickle_outfile);
   PyObject* negative_one = PyInt_FromLong(-1);
   PyObject* cPickle_dump_res =
@@ -279,19 +284,27 @@ PyObject* on_disk_cache_PUT(FuncMemoInfo* fmi, PyObject* hash_key, PyObject* con
   Py_DECREF(negative_one);
   Py_DECREF(pickle_outfile);
 
-  // For optimization purposes ... if the PUT succeeded, then the cache
-  // is no longer empty
   if (cPickle_dump_res) {
+    // For optimization purposes ... if the PUT succeeded, then the
+    // cache is no longer empty
     fmi->on_disk_cache_empty = 0;
+
+    // atomically rename to its permanent filename
+    PyObject* pickle_filename =
+      PyString_FromFormat("%s/%s.pickle",
+                          subdir_path_str,
+                          PyString_AsString(hash_key));
+
+    rename(PyString_AsString(pickle_tmp_filename), PyString_AsString(pickle_filename));
+    Py_DECREF(pickle_filename);
   }
   else {
     // if the PUT failed, then just to be safe, delete the file so that
     // we don't try to unpickle an inconsistent file
-    unlink(PyString_AsString(pickle_filename));
+    unlink(PyString_AsString(pickle_tmp_filename));
   }
 
-  Py_DECREF(pickle_filename);
-
+  Py_DECREF(pickle_tmp_filename);
   return cPickle_dump_res;
 }
 
