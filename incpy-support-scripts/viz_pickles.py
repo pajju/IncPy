@@ -9,10 +9,9 @@ import hashlib
 
 def render_memo_table_entry_lst(memo_table_lst):
   for e in memo_table_lst:
-    print '  ~~~', e['runtime_ms'], 'ms ~~~'
-    print '  Args:', e['args']
-
     canonical_name = e['canonical_name']
+    print '===', canonical_name, e['runtime_ms'], 'ms ==='
+    print '  Args:', e['args']
 
     try:
       global_var_dependencies = e['global_vars_read']
@@ -33,7 +32,6 @@ def render_memo_table_entry_lst(memo_table_lst):
         if func_name != canonical_name:
           print '   ', func_name
       print
-
 
     if 'stdout_buf' in e:
       stdout_repr = repr(e['stdout_buf'])
@@ -64,8 +62,6 @@ def render_memo_table_entry_lst(memo_table_lst):
       print '  Files written:', ','.join(sorted(file_write_dependencies.keys()))
     except KeyError:
       pass
-
-    print
 
 
 def main(argv=None):
