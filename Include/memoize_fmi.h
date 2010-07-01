@@ -17,14 +17,12 @@ extern "C" {
 
 #include "Python.h"
 
-// Object that contains the memo table, dependencies, and profiling
-// metadata for one function (only some fields will be serialized to disk)
+// Object that contains the code dependencies and profiling
+// metadata for one function
 typedef struct {
-  // at the end of execution, these fields are serialized to disk as:
-  //   incpy-cache/<hash of canonical name>.dependencies.pickle
+  // Key: canonical name of function called by this one
+  // Value: code dependency 'object' (see Python/memoize_codedep.c)
   PyObject* code_dependencies; // Dict
-
-  // these fields below are NOT serialized to disk
 
   PyObject* f_code; // PyCodeObject that contains the function's
                     // canonical name as pg_canonical_name
@@ -36,7 +34,6 @@ typedef struct {
 
   // booleans
   char is_impure;    // is this function impure during THIS execution?
-  char all_code_deps_SAT; // are all code dependencies satisfied during THIS execution?
 
   // should we not even bother memoizing this function? (but we still
   // need to track its dependencies) ... only relevant when
@@ -48,11 +45,11 @@ typedef struct {
   // so no need to check it
   char on_disk_cache_empty;
 
-
   // how many times has this function been executed and terminated
   // 'quickly' with the memoized_vals field as NULL?  only relevant when
   // ENABLE_IGNORE_FUNC_THRESHOLD_OPTIMIZATION is on
-  unsigned int num_fast_calls_with_no_memoized_vals;
+  // (small value between 0 and 255, to conserve struct space)
+  unsigned char num_fast_calls_with_no_memoized_vals;
 
 } FuncMemoInfo;
 

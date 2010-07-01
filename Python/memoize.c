@@ -218,8 +218,8 @@ static PyObject* numpy_module = NULL;
 // forward declarations:
 static void mark_impure(PyFrameObject* f, char* why);
 static void mark_entire_stack_impure(char* why);
-static void add_global_read(PyObject* varname, PyObject* value,
-                            PyObject* output_dict);
+static void add_global_read_to_dict(PyObject* varname, PyObject* value,
+                                    PyObject* output_dict);
 static void add_file_dependency(PyObject* filename, PyObject* output_dict);
 
 // from Objects/fileobject.c
@@ -240,8 +240,6 @@ extern FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod);
 extern void DELETE_func_memo_info(FuncMemoInfo* fmi);
 extern void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info);
 extern FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod);
-extern PyObject* serialize_func_memo_info_dependencies(FuncMemoInfo* func_memo_info);
-extern PyObject* get_memoized_vals_lst(FuncMemoInfo* fmi);
 
 
 // set time limit to something smaller for debug mode, so that my
@@ -917,31 +915,6 @@ void add_new_code_dep(PyCodeObject* cod) {
     PyObject* new_code_dependency = CREATE_NEW_code_dependency(cod);
     PyDict_SetItem(func_name_to_code_dependency, cod->pg_canonical_name, new_code_dependency);
     Py_DECREF(new_code_dependency);
-
-    /* This is overkill, but what we're gonna do is clear the
-       all_code_deps_SAT fields of ALL currently-existing FuncMemoInfo
-       entries, since their code dependencies might have changed because
-       new code might have been loaded for the SAME function name.  This
-       can happen when files are loaded with execfile(), which shells
-       like IPython do.  That is, in the middle of a Python interpreter
-       session, the code for a function might actually change, since
-       it's been reloaded from the source file.
-
-       (See IncPy-regression-tests/execfile_2 for a test case)
-
-       The proper solution is to keep links from each FuncMemoInfo entry
-       to all of its callers, so that we can simply invalidate that
-       entry and all its (transitive) callers rather than invalidating
-       ALL FuncMemoInfo entries.  However, that's too much work for now :) 
-    
-       If this becomes a performance bottleneck, then OPTIMIZE IT! */
-    PyObject* canonical_name = NULL;
-    PyObject* fmi_addr = NULL;
-    Py_ssize_t pos = 0;
-    while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
-      FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyInt_AsLong(fmi_addr);
-      func_memo_info->all_code_deps_SAT = 0;
-    }
   }
 }
 
@@ -1387,73 +1360,20 @@ void pg_finalize() {
   // it later temporarily when we're calling cPickle_dump_func, etc.
   pg_activated = 0;
 
+
+  // TODO: don't bother freeing stuff at the end of execution if it
+  // takes too long (and we don't care about saving memory anyhow)
+
   TrieFree(self_mutator_c_methods);
   TrieFree(definitely_impure_funcs);
 
   // seems slow and irrelevant, so don't do it right now ...
   //free_all_shadow_memory();
 
-  struct stat st;
-  // create incpy-cache/ sub-directory if it doesn't already exist
-  if (stat("incpy-cache", &st) != 0) {
-    mkdir("incpy-cache", 0777);
-  }
-
-  PyObject* negative_one = PyInt_FromLong(-1);
-
-  // serialize and pickle func_memo_info entries to disk
+  // deallocate all FuncMemoInfo entries:
   PyObject* canonical_name = NULL;
   PyObject* fmi_addr = NULL;
   Py_ssize_t pos = 0;
-  while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
-    FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyInt_AsLong(fmi_addr);
-
-    PyObject* func_name = GET_CANONICAL_NAME(func_memo_info);
-    PyObject* basename = hexdigest_str(func_name);
-
-    PyObject* deps_fn =
-      PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
-                          PyString_AsString(basename));
-
-    // pickle dependencies to disk:
-    PyObject* serialized_deps =
-      serialize_func_memo_info_dependencies(func_memo_info);
-
-    PyObject* deps_outfile = PyFile_FromString(PyString_AsString(deps_fn), "wb");
-    assert(deps_outfile);
-    // pass in -1 to force cPickle to use a binary protocol
-    PyObject* cPickle_dump_res =
-      PyObject_CallFunctionObjArgs(cPickle_dump_func,
-                                   serialized_deps,
-                                   deps_outfile,
-                                   negative_one, NULL);
-
-    // note that pickling might still fail if something inside
-    // of serialized_deps isn't picklable
-    if (cPickle_dump_res) {
-      Py_DECREF(cPickle_dump_res);
-    }
-    else {
-      assert(PyErr_Occurred());
-      PyErr_Clear();
-
-      PG_LOG_PRINTF("dict(event='WARNING', what='dependencies cannot be pickled', funcname='%s')\n",
-                    PyString_AsString(func_name));
-    }
-
-    Py_DECREF(deps_outfile);
-    Py_DECREF(serialized_deps);
-    Py_DECREF(deps_fn);
-    Py_DECREF(basename);
-  }
-
-  Py_DECREF(negative_one);
-
-
-  // deallocate all FuncMemoInfo entries:
-  canonical_name = NULL;
-  fmi_addr = NULL;
-  pos = 0; // reset it!
   while (PyDict_Next(all_func_memo_info_dict, &pos, &canonical_name, &fmi_addr)) {
     FuncMemoInfo* func_memo_info = (FuncMemoInfo*)PyInt_AsLong(fmi_addr);
     DELETE_func_memo_info(func_memo_info);
@@ -1498,52 +1418,38 @@ void pg_finalize() {
 
 /* checks code dependencies for the current function
    returns 1 if dependencies satisfied, 0 if they're not */
-static int are_code_dependencies_satisfied(FuncMemoInfo* my_func_memo_info,
+static int are_code_dependencies_satisfied(PyObject* code_dependency_dict,
                                            PyFrameObject* cur_frame) {
   // you must at least have a code dependency on YOURSELF
-  assert(my_func_memo_info->code_dependencies);
+  assert(code_dependency_dict);
 
-  // Optimization: assuming that code doesn't change in the middle of
-  // execution (which is a pretty safe assumption), we only need to do
-  // this check ONCE at the beginning of execution and not on each call
-  //
-  // Caveat: if code is re-loaded in the middle of execution, it CAN
-  // actually change, so all_code_deps_SAT must be set to 0 in those
-  // cases (grep for 'all_code_deps_SAT' to see where that occurs)
-  if (!my_func_memo_info->all_code_deps_SAT) {
-    PyObject* dependent_func_canonical_name = NULL;
-    PyObject* memoized_code_dependency = NULL;
-    Py_ssize_t pos = 0;
-    while (PyDict_Next(my_func_memo_info->code_dependencies,
-                       &pos, &dependent_func_canonical_name, &memoized_code_dependency)) {
-      PyObject* cur_code_dependency =
-        PyDict_GetItem(func_name_to_code_dependency, dependent_func_canonical_name);
+  PyObject* dependent_func_canonical_name = NULL;
+  PyObject* memoized_code_dependency = NULL;
+  Py_ssize_t pos = 0;
+  while (PyDict_Next(code_dependency_dict,
+                     &pos, &dependent_func_canonical_name, &memoized_code_dependency)) {
+    PyObject* cur_code_dependency =
+      PyDict_GetItem(func_name_to_code_dependency, dependent_func_canonical_name);
 
-      char* dependent_func_name_str = PyString_AsString(dependent_func_canonical_name);
-      // if the function is NOT FOUND or its code has changed, then
-      // that code dependency is definitely broken
-      if (!cur_code_dependency) {
-        PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_NOT_FOUND', what='%s')\n",
+    char* dependent_func_name_str = PyString_AsString(dependent_func_canonical_name);
+    // if the function is NOT FOUND or its code has changed, then
+    // that code dependency is definitely broken
+    if (!cur_code_dependency) {
+      PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_NOT_FOUND', what='%s')\n",
+                    dependent_func_name_str);
+      USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s not found\n",
+                      PyString_AsString(GET_CANONICAL_NAME(cur_frame->func_memo_info)),
                       dependent_func_name_str);
-        USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s not found\n",
-                        PyString_AsString(GET_CANONICAL_NAME(my_func_memo_info)),
-                        dependent_func_name_str);
-        return 0;
-      }
-      else if (!code_dependency_EQ(cur_code_dependency, memoized_code_dependency)) {
-        PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_CHANGED', what='%s')\n",
-                      dependent_func_name_str);
-        USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s changed\n",
-                        PyString_AsString(GET_CANONICAL_NAME(my_func_memo_info)),
-                        dependent_func_name_str);
-        return 0;
-      }
+      return 0;
     }
-
-    // if we make it this far without hitting an early 'return 0',
-    // then this function's code dependencies are satisfied for this
-    // particular script execution, so we don't have to check it again:
-    my_func_memo_info->all_code_deps_SAT = 1;
+    else if (!code_dependency_EQ(cur_code_dependency, memoized_code_dependency)) {
+      PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_CHANGED', what='%s')\n",
+                    dependent_func_name_str);
+      USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s changed\n",
+                      PyString_AsString(GET_CANONICAL_NAME(cur_frame->func_memo_info)),
+                      dependent_func_name_str);
+      return 0;
+    }
   }
 
   return 1;
@@ -1655,22 +1561,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   }
 
 
-  if (!are_code_dependencies_satisfied(f->func_memo_info, f)) {
-    if (trust_prev_memoized_results) {
-      fprintf(stderr, "WARNING: trusting possibly outdated results for %s\n",
-              PyString_AsString(co->pg_canonical_name));
-      USER_LOG_PRINTF("TRUSTING_MEMOIZED_RESULTS %s\n", PyString_AsString(co->pg_canonical_name));
-    }
-    else {
-      clear_cache_and_mark_pure(f->func_memo_info);
-      USER_LOG_PRINTF("CLEAR_CACHE %s\n", PyString_AsString(co->pg_canonical_name));
-      goto pg_enter_frame_done;
-    }
-  }
-
-
-  // by now, all code dependencies are still satisfied ...
-
   // populate stored_args_lst, so that we can calculate its hash
 
   /* We can now use co_argcount to figure out how many parameters are
@@ -1726,12 +1616,32 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
       for (memoized_vals_idx = 0;
            memoized_vals_idx < PyList_Size(memoized_vals_matching_args);
            memoized_vals_idx++) {
-        int all_global_vars_match = 1;
-
         PyObject* elt = PyList_GET_ITEM(memoized_vals_matching_args, memoized_vals_idx);
         assert(PyDict_CheckExact(elt));
 
+        // first check if the code dependencies are still satisfied; if
+        // not, then clear this entire cache entry and get outta here!
+        PyObject* code_dependencies = PyDict_GetItemString(elt, "code_dependencies");
+        assert(code_dependencies);
+
+        if (!are_code_dependencies_satisfied(code_dependencies, f)) {
+          if (trust_prev_memoized_results) {
+            fprintf(stderr, "WARNING: trusting possibly outdated results for %s\n",
+                    PyString_AsString(co->pg_canonical_name));
+            USER_LOG_PRINTF("TRUSTING_MEMOIZED_RESULTS %s\n", PyString_AsString(co->pg_canonical_name));
+          }
+          else {
+            clear_cache_and_mark_pure(f->func_memo_info);
+            USER_LOG_PRINTF("CLEAR_CACHE %s\n", PyString_AsString(co->pg_canonical_name));
+
+            Py_DECREF(memoized_vals_matching_args); // tricky tricky!
+            goto pg_enter_frame_done;
+          }
+        }
+
+
         // find the first element with global_vars_read matching
+        int all_global_vars_match = 1;
         PyObject* global_vars_read = PyDict_GetItemString(elt, "global_vars_read");
         if (global_vars_read) {
           PyObject* global_varname_tuple = NULL;
@@ -2238,8 +2148,14 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   PyObject* memo_table_entry = PyDict_New();
 
+  PyDict_SetItemString(memo_table_entry, "canonical_name", canonical_name);
+
   PyDict_SetItemString(memo_table_entry, "args", f->stored_args_lst);
   PyDict_SetItemString(memo_table_entry, "retval", retval);
+
+  assert(my_func_memo_info->code_dependencies);
+  PyDict_SetItemString(memo_table_entry, "code_dependencies",
+                       my_func_memo_info->code_dependencies);
 
   PyObject* runtime_ms_obj = PyInt_FromLong(runtime_ms);
   PyDict_SetItemString(memo_table_entry, "runtime_ms", runtime_ms_obj);
@@ -2269,7 +2185,7 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       PyObject* val = find_globally_reachable_obj_by_name(global_varname_tuple, f);
 
       if (val) {
-        add_global_read(global_varname_tuple, val, global_vars_read);
+        add_global_read_to_dict(global_varname_tuple, val, global_vars_read);
       }
       else {
 #ifdef ENABLE_DEBUG_LOGGING
@@ -2407,8 +2323,8 @@ pg_exit_frame_done:
 //
 //   varname can be munged by find_globally_reachable_obj_by_name()
 //   (it's either a string or a tuple of strings)
-static void add_global_read(PyObject* varname, PyObject* value,
-                            PyObject* output_dict) {
+static void add_global_read_to_dict(PyObject* varname, PyObject* value,
+                                    PyObject* output_dict) {
   if (NEVER_PICKLE(value)) {
     return;
   }

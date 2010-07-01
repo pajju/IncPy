@@ -7,25 +7,12 @@ import cPickle
 import pprint
 import hashlib
 
-# render a dependencies 'object', which is a dict
-def render_dependencies(fmi):
-  canonical_name = fmi['canonical_name']
-  print '===', canonical_name, '==='
-
-  code_deps = fmi['code_dependencies']
-  if len(code_deps) > 1:
-    print 'Called functions:'
-    for func_name in sorted(code_deps):
-      if func_name != canonical_name:
-        print ' ', func_name
-    print
-  print
-
-
 def render_memo_table_entry_lst(memo_table_lst):
   for e in memo_table_lst:
     print '  ~~~', e['runtime_ms'], 'ms ~~~'
     print '  Args:', e['args']
+
+    canonical_name = e['canonical_name']
 
     try:
       global_var_dependencies = e['global_vars_read']
@@ -37,6 +24,16 @@ def render_memo_table_entry_lst(memo_table_lst):
 
     retval = e['retval']
     print '  Return value:', retval
+    print
+
+    code_deps = e['code_dependencies']
+    if len(code_deps) > 1:
+      print '  Called functions:'
+      for func_name in sorted(code_deps):
+        if func_name != canonical_name:
+          print '   ', func_name
+      print
+
 
     if 'stdout_buf' in e:
       stdout_repr = repr(e['stdout_buf'])
@@ -81,11 +78,6 @@ def main(argv=None):
 
   for d in function_cache_dirs:
     basename = d.split('.')[0]
-    dependencies_file = os.path.join(incpy_cache_dir, basename + '.dependencies.pickle')
-    assert os.path.isfile(dependencies_file)
-    deps = cPickle.load(open(dependencies_file))
-    render_dependencies(deps)
-
     cache_dir_path = os.path.join(incpy_cache_dir, d)
     assert os.path.isdir(cache_dir_path)
     for memo_table_entry_pickle in os.listdir(cache_dir_path):

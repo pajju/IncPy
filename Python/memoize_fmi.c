@@ -21,9 +21,6 @@
 #include <unistd.h>
 
 
-FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject* cod);
-
-
 FuncMemoInfo* NEW_func_memo_info(PyCodeObject* cod) {
   FuncMemoInfo* new_fmi = PyMem_New(FuncMemoInfo, 1);
   // null out all fields
@@ -120,13 +117,12 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
   // it's now pure again until proven otherwise
   func_memo_info->is_impure = 0;
   func_memo_info->likely_nothing_to_memoize = 0;
-  func_memo_info->all_code_deps_SAT = 0;
   func_memo_info->num_fast_calls_with_no_memoized_vals = 0;
 }
 
 
 // Look for the appropriate func_memo_info entry from a code object,
-// memory, and on-disk, or create a new one if it doesn't yet exist
+// in memory, or create a new one if it doesn't yet exist
 FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
   // The order of the following steps really MATTERS!
   
@@ -140,115 +136,27 @@ FuncMemoInfo* get_func_memo_info_from_cod(PyCodeObject* cod) {
   if (fmi_addr) {
     return (FuncMemoInfo*)PyInt_AsLong(fmi_addr);
   }
-
-  FuncMemoInfo* my_func_memo_info = NULL;
-
-  // next, check to see whether it's stored in a .pickle file.
-  PyObject* basename = hexdigest_str(cod->pg_canonical_name);
-  PyObject* pickle_filename = PyString_FromFormat("incpy-cache/%s.dependencies.pickle",
-                                         PyString_AsString(basename));
-  assert(pickle_filename);
-  Py_DECREF(basename);
-
-  PyObject* pf = PyFile_FromString(PyString_AsString(pickle_filename), "r");
-  Py_DECREF(pickle_filename);
-  if (pf) {
-    // note that calling cPickle_load_func might cause other
-    // modules to be imported, since the pickle module loads
-    // modules as-needed depending on the types of the objects
-    // currently being unpickled
-    PyObject* serialized_func_memo_info = PyObject_CallFunctionObjArgs(cPickle_load_func, pf, NULL);
-
-    // only initialize my_func_memo_info if serialized_func_memo_info
-    // can be properly unpickled
-    if (!serialized_func_memo_info) {
-      assert(PyErr_Occurred());
-      PyErr_Clear();
-    }
-    else {
-      my_func_memo_info = deserialize_func_memo_info(serialized_func_memo_info, cod);
-      Py_DECREF(serialized_func_memo_info);
-
-      struct stat st;
-      if (stat(PyString_AsString(my_func_memo_info->cache_subdirectory_path), &st) != 0) {
-        my_func_memo_info->on_disk_cache_empty = 1;
-      }
-    }
-
-    Py_DECREF(pf);
-  }
   else {
-    assert(PyErr_Occurred());
-    PyErr_Clear();
+    // otherwise, create a fresh new entry and add it to
+    // all_func_memo_info_dict:
+
+    FuncMemoInfo* new_fmi = NEW_func_memo_info(cod);
+
+    // set on_disk_cache_empty depending on whether cache sub-directory exists
+    assert(new_fmi->cache_subdirectory_path);
+    struct stat st;
+    if (stat(PyString_AsString(new_fmi->cache_subdirectory_path), &st) != 0) {
+      new_fmi->on_disk_cache_empty = 1;
+    }
+
+    // add its address to all_func_memo_info_dict:
+    assert(new_fmi);
+    fmi_addr = PyInt_FromLong((long)new_fmi);
+    PyDict_SetItem(all_func_memo_info_dict, cod->pg_canonical_name, fmi_addr);
+    Py_DECREF(fmi_addr);
+
+    return new_fmi;
   }
-
-  // if it's not found, then create a fresh new FuncMemoInfo.
-  if (!my_func_memo_info) {
-    // clear the error code first
-    PyErr_Clear();
-
-    my_func_memo_info = NEW_func_memo_info(cod);
-    my_func_memo_info->on_disk_cache_empty = 1;
-
-    assert(my_func_memo_info);
-  }
-
-  // add its address to all_func_memo_info_dict:
-  assert(my_func_memo_info);
-  fmi_addr = PyInt_FromLong((long)my_func_memo_info);
-  PyDict_SetItem(all_func_memo_info_dict, cod->pg_canonical_name, fmi_addr);
-  Py_DECREF(fmi_addr);
-
-  return my_func_memo_info;
-}
-
-
-// Given a FuncMemoInfo, create a serialized version of all of its
-// dependencies as a newly-allocated dict (ready for pickling).
-PyObject* serialize_func_memo_info_dependencies(FuncMemoInfo* func_memo_info) {
-  PyObject* serialized_fmi = PyDict_New();
-
-  assert(GET_CANONICAL_NAME(func_memo_info));
-  PyDict_SetItemString(serialized_fmi,
-                       "canonical_name",
-                       GET_CANONICAL_NAME(func_memo_info));
-
-  if (func_memo_info->code_dependencies) {
-    PyDict_SetItemString(serialized_fmi,
-                         "code_dependencies",
-                         func_memo_info->code_dependencies);
-  }
-
-  return serialized_fmi;
-}
-
-
-// given a PyDict representing a serialized version of a FuncMemoInfo
-// object and its corresponding code object, deserialize it and return a
-// newly-allocated FuncMemoInfo object
-FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject* cod) {
-  assert(PyDict_CheckExact(serialized_fmi));
-
-  FuncMemoInfo* my_func_memo_info = NEW_func_memo_info(cod);
-
-
-#ifdef ENABLE_DEBUG_LOGGING
-  // sanity check to make sure the name matches:
-  PyObject* serialized_canonical_name = 
-    PyDict_GetItemString(serialized_fmi, "canonical_name");
-  assert(serialized_canonical_name);
-  assert(_PyString_Eq(serialized_canonical_name, cod->pg_canonical_name));
-#endif // ENABLE_DEBUG_LOGGING
-
-
-  PyObject* code_dependencies =
-    PyDict_GetItemString(serialized_fmi, "code_dependencies");
-  if (code_dependencies) {
-    Py_INCREF(code_dependencies);
-    my_func_memo_info->code_dependencies = code_dependencies;
-  }
-
-  return my_func_memo_info;
 }
 
 
@@ -259,8 +167,12 @@ FuncMemoInfo* deserialize_func_memo_info(PyObject* serialized_fmi, PyCodeObject*
 
    Each 'value' is a LIST of dicts, each containing the following fields:
 
+     "canonical_name" --> name of function
+
      "args" --> argument list
      "global_vars_read" --> dict mapping global vars to values (OPTIONAL)
+
+     "code_dependencies" --> dict mapping function names to code 'objects'
 
      "files_read" --> dict mapping files read to modtimes (OPTIONAL)
      "files_written" --> dict mapping files written to modtimes (OPTIONAL)
