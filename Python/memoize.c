@@ -615,6 +615,8 @@ static PyObject* create_proxy_object(PyObject* obj) {
     // some files have no file_pos, like <stdin> stream, so don't try to
     // create proxies for those
     if (!file_pos) {
+      assert(PyErr_Occurred());
+      PyErr_Clear();
       return NULL;
     }
 
@@ -2231,8 +2233,15 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       PyObject* elt = f->f_localsplus[i];
       if (PyFile_Check(elt)) {
         PyFileObject* file_obj = (PyFileObject*)elt;
+
         PyObject* file_pos = file_tell(file_obj);
-        assert(file_pos);
+        // some files have no file_pos, like <stdin> stream, so skip these
+        if (!file_pos) {
+          assert(PyErr_Occurred());
+          PyErr_Clear();
+          continue;
+        }
+
         if (!final_file_seek_pos) {
           final_file_seek_pos = PyDict_New();
         }
