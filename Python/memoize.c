@@ -612,7 +612,11 @@ static PyObject* create_proxy_object(PyObject* obj) {
     PyFileObject* f = (PyFileObject*)obj;
 
     PyObject* file_pos = file_tell(f);
-    assert(file_pos);
+    // some files have no file_pos, like <stdin> stream, so don't try to
+    // create proxies for those
+    if (!file_pos) {
+      return NULL;
+    }
 
     PyObject* proxy_tag = PyString_FromString("FileProxy");
     PyObject* ret = PyTuple_Pack(3, proxy_tag, f->f_name, file_pos);
