@@ -1589,6 +1589,11 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
      TODO: I haven't tested support for varargs yet */
   populate_stored_args_lst(f);
 
+  PyObject* memoized_global_vars_read = NULL;
+  PyObject* memoized_code_dependencies = NULL;
+  PyObject* memoized_files_read = NULL;
+  PyObject* memoized_files_written = NULL;
+
   PyObject* memoized_retval = NULL;
   PyObject* memoized_stdout_buf = NULL;
   PyObject* memoized_stderr_buf = NULL;
@@ -1638,10 +1643,10 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
         // first check if the code dependencies are still satisfied; if
         // not, then clear this entire cache entry and get outta here!
-        PyObject* code_dependencies = PyDict_GetItemString(elt, "code_dependencies");
-        assert(code_dependencies);
+        memoized_code_dependencies = PyDict_GetItemString(elt, "code_dependencies");
+        assert(memoized_code_dependencies);
 
-        if (!are_code_dependencies_satisfied(code_dependencies, f)) {
+        if (!are_code_dependencies_satisfied(memoized_code_dependencies, f)) {
           if (trust_prev_memoized_results) {
             fprintf(stderr, "WARNING: trusting possibly outdated results for %s\n",
                     PyString_AsString(co->pg_canonical_name));
@@ -1659,12 +1664,12 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
         // find the first element with global_vars_read matching
         int all_global_vars_match = 1;
-        PyObject* global_vars_read = PyDict_GetItemString(elt, "global_vars_read");
-        if (global_vars_read) {
+        memoized_global_vars_read = PyDict_GetItemString(elt, "global_vars_read");
+        if (memoized_global_vars_read) {
           PyObject* global_varname_tuple = NULL;
           PyObject* memoized_value = NULL;
           Py_ssize_t pos = 0;
-          while (PyDict_Next(global_vars_read,
+          while (PyDict_Next(memoized_global_vars_read,
                              &pos, &global_varname_tuple, &memoized_value)) {
             PyObject* cur_value =
               find_globally_reachable_obj_by_name(global_varname_tuple, f);
@@ -1699,12 +1704,12 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         // memoized_vals_matching_args and break out of the loop
         char dependencies_satisfied = 1;
 
-        PyObject* files_read = PyDict_GetItemString(elt, "files_read");
-        if (files_read) {
+        memoized_files_read = PyDict_GetItemString(elt, "files_read");
+        if (memoized_files_read) {
           PyObject* dependent_filename = NULL;
           PyObject* saved_modtime_obj = NULL;
           Py_ssize_t pos = 0;
-          while (PyDict_Next(files_read,
+          while (PyDict_Next(memoized_files_read,
                              &pos, &dependent_filename, &saved_modtime_obj)) {
             char* dependent_filename_str = PyString_AsString(dependent_filename);
             PyFileObject* fobj = (PyFileObject*)PyFile_FromString(dependent_filename_str, "r");
@@ -1738,12 +1743,12 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
           }
         }
 
-        PyObject* files_written = PyDict_GetItemString(elt, "files_written");
-        if (files_written) {
+        memoized_files_written = PyDict_GetItemString(elt, "files_written");
+        if (memoized_files_written) {
           PyObject* dependent_filename = NULL;
           PyObject* saved_modtime_obj = NULL;
           Py_ssize_t pos = 0;
-          while (PyDict_Next(files_written,
+          while (PyDict_Next(memoized_files_written,
                              &pos, &dependent_filename, &saved_modtime_obj)) {
             char* dependent_filename_str = PyString_AsString(dependent_filename);
 
@@ -1821,6 +1826,11 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
         // VERY important to increment all of their refcounts, since
         // memoized_vals_matching_args (the enclosing parent) will be
         // blown away soon!!!
+        Py_XINCREF(memoized_global_vars_read);
+        Py_XINCREF(memoized_code_dependencies);
+        Py_XINCREF(memoized_files_read);
+        Py_XINCREF(memoized_files_written);
+
         Py_XINCREF(memoized_retval);
         Py_XINCREF(memoized_stdout_buf);
         Py_XINCREF(memoized_stderr_buf);
@@ -1837,6 +1847,64 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   // woohoo, success!  you've avoided re-executing the function!
   if (memoized_retval) {
     assert(Py_REFCNT(memoized_retval) > 0);
+
+    /* VERY IMPORTANT!  if you skip this function, then all of its
+       callers should INHERIT its dependencies, since that matches
+       the behavior of actually executing the function
+       (see IncPy-regression-tests/skip_and_inherit_deps_* tests) */
+    PyFrameObject* cur_frame = f->f_back;
+    while (cur_frame) {
+      if (cur_frame->func_memo_info) {
+        if (memoized_global_vars_read) {
+          PyObject* global_varname_tuple = NULL;
+          PyObject* memoized_value = NULL;
+          Py_ssize_t pos = 0;
+          while (PyDict_Next(memoized_global_vars_read,
+                             &pos, &global_varname_tuple, &memoized_value)) {
+            LAZY_INIT_SET_ADD(cur_frame->globals_read_set, global_varname_tuple);
+          }
+        }
+
+        if (memoized_code_dependencies) {
+          PyObject* canonical_name = NULL;
+          PyObject* saved_code_dep = NULL;
+          Py_ssize_t pos = 0;
+          while (PyDict_Next(memoized_code_dependencies,
+                             &pos, &canonical_name, &saved_code_dep)) {
+            PyObject* caller_code_deps = cur_frame->func_memo_info->code_dependencies;
+            assert(caller_code_deps);
+            PyDict_SetItem(caller_code_deps, canonical_name, saved_code_dep);
+          }
+        }
+
+        if (memoized_files_read) {
+          PyObject* dependent_filename = NULL;
+          PyObject* saved_modtime_obj = NULL;
+          Py_ssize_t pos = 0;
+          while (PyDict_Next(memoized_files_read,
+                             &pos, &dependent_filename, &saved_modtime_obj)) {
+            LAZY_INIT_SET_ADD(cur_frame->files_read_set, dependent_filename);
+          }
+        }
+
+        if (memoized_files_written) {
+          PyObject* dependent_filename = NULL;
+          PyObject* saved_modtime_obj = NULL;
+          Py_ssize_t pos = 0;
+          while (PyDict_Next(memoized_files_written,
+                             &pos, &dependent_filename, &saved_modtime_obj)) {
+            LAZY_INIT_SET_ADD(cur_frame->files_written_set, dependent_filename);
+            // if you actually memoized a file write, that means it was
+            // self-contained, so it must have been in both your
+            // files_opened_w_set and files_closed_set
+            LAZY_INIT_SET_ADD(cur_frame->files_opened_w_set, dependent_filename);
+            LAZY_INIT_SET_ADD(cur_frame->files_closed_set, dependent_filename);
+          }
+        }
+      }
+      cur_frame = cur_frame->f_back;
+    }
+
 
     // if found, print memoized buffers to stdout/stderr
     // and also append them to the buffers of all of your callers
@@ -1912,6 +1980,17 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
                     PyString_AsString(co->pg_canonical_name),
                     memo_lookup_time_ms,
                     memoized_runtime_ms);
+
+    // decref everything except for memoized_retval, since we will
+    // return that to the caller
+    Py_XDECREF(memoized_global_vars_read);
+    Py_XDECREF(memoized_code_dependencies);
+    Py_XDECREF(memoized_files_read);
+    Py_XDECREF(memoized_files_written);
+
+    Py_XDECREF(memoized_stdout_buf);
+    Py_XDECREF(memoized_stderr_buf);
+    Py_XDECREF(final_file_seek_pos);
 
     MEMOIZE_PUBLIC_END()
     return memoized_retval;
