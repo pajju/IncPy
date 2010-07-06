@@ -1,6 +1,7 @@
 # visualize pickles produced by IncPy
 
 # pass in a directory (argv[1]) that contains an incpy-cache/ sub-directory
+# and pass in name of main module to import as argv[2]
 
 import os, sys, re
 import cPickle
@@ -68,6 +69,17 @@ def main(argv=None):
   if not argv: argv = sys.argv
   dirname = argv[1]
   assert os.path.isdir(dirname)
+
+  if len(argv) > 2:
+    sys.path.insert(0, dirname)
+    module_name = sys.argv[2]
+    print "Importing", module_name
+    mod = __import__(module_name)
+    for v in vars(mod):
+      if not v.startswith('_'):
+        if v not in globals():
+          globals()[v] = getattr(mod, v)
+
 
   incpy_cache_dir = os.path.join(dirname, 'incpy-cache')
   function_cache_dirs = [e for e in os.listdir(incpy_cache_dir) if e.endswith('.cache')]
