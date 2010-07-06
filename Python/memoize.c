@@ -882,12 +882,15 @@ void pg_init_new_code_object(PyCodeObject* co) {
   //
   //   0. ignore code that we can't even create a canonical name for
   //      (presumably because create_canonical_code_name returned an error)
-  //   1. ignore lambda functions
-  //   2. ignore code with untrackable filenames
-  //   3. ignore code from files whose paths start with some element of
+  //   1. ignore generator EXPRESSIONS (not generator functions, though)
+  //   2. ignore lambda functions
+  //   3. ignore code with untrackable filenames
+  //   4. ignore code from files whose paths start with some element of
   //      ignore_paths_lst
   co->pg_ignore =
     ((!co->pg_canonical_name) ||
+
+     (strcmp(PyString_AsString(co->co_name), "<genexpr>") == 0) ||
 
      (strcmp(PyString_AsString(co->co_name), "<lambda>") == 0) ||
 
