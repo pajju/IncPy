@@ -11,6 +11,7 @@ import hashlib
 def render_memo_table_entry_lst(memo_table_lst):
   for e in memo_table_lst:
     canonical_name = e['canonical_name']
+    print
     print '===', canonical_name, e['runtime_ms'], 'ms ==='
     print '  Args:', e['args']
 

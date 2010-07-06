@@ -882,15 +882,12 @@ void pg_init_new_code_object(PyCodeObject* co) {
   //
   //   0. ignore code that we can't even create a canonical name for
   //      (presumably because create_canonical_code_name returned an error)
-  //   1. ignore generators
-  //   2. ignore lambda functions
-  //   3. ignore code with untrackable filenames
-  //   4. ignore code from files whose paths start with some element of
+  //   1. ignore lambda functions
+  //   2. ignore code with untrackable filenames
+  //   3. ignore code from files whose paths start with some element of
   //      ignore_paths_lst
   co->pg_ignore =
     ((!co->pg_canonical_name) ||
-
-     (co->co_flags & CO_GENERATOR) ||
 
      (strcmp(PyString_AsString(co->co_name), "<lambda>") == 0) ||
 
@@ -1527,8 +1524,6 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     goto pg_enter_frame_done;
   }
 
-  f->func_memo_info = get_func_memo_info_from_cod(co);
-
   // update ALL callers with a code dependency on you
   // (TODO: can optimize later by only updating your immediate caller and
   //  then 'bubbling up' dependencies when it exits)
@@ -1559,6 +1554,19 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
     cur_frame = cur_frame->f_back;
   }
 
+
+  // punt on all generators without generating a func_memo_info
+  // for them, but we should STILL add a code dependency on them
+  // (done by the code above), since users can define generator
+  // functions and we want to track those dependencies!
+  if (co->co_flags & CO_GENERATOR) {
+    goto pg_enter_frame_done;
+  }
+
+
+  // get a func_memo_info for all 'regular' functions that are eligible
+  // for memoization
+  f->func_memo_info = get_func_memo_info_from_cod(co);
 
   // punt on all impure or ignored functions ... we can't memoize their return values
   // (but we still need to track their dependencies)
