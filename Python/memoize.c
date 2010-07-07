@@ -2759,7 +2759,9 @@ static void init_self_mutator_c_methods(void) {
 static void init_definitely_impure_funcs(void) {
   definitely_impure_funcs = TrieCalloc();
 
-  TrieInsert(definitely_impure_funcs, "draw"); // matplotlib
+  // uhhh, don't automatically mark draw as impure, since
+  // some people use 'draw' to render then save output files
+  //TrieInsert(definitely_impure_funcs, "draw"); // matplotlib
 
   // if you open stdin, then you are impure:
   TrieInsert(definitely_impure_funcs, "input");
