@@ -1551,7 +1551,12 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
           assert(my_self_code_dependency);
         }
 
-        PyDict_SetItem(caller_code_deps, co->pg_canonical_name, my_self_code_dependency);
+        // this should really always be true, but in some weird cases
+        // (like if you're running numpy without ignoring its entire
+        // directory), it doesn't always hold, so put a guard anyways ...
+        if (my_self_code_dependency) {
+          PyDict_SetItem(caller_code_deps, co->pg_canonical_name, my_self_code_dependency);
+        }
       }
     }
     cur_frame = cur_frame->f_back;
