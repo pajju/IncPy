@@ -2358,7 +2358,9 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     while (_PySet_Next(f->files_written_set, &s_pos, &written_filename)) {
       add_file_dependency(written_filename, files_written);
     }
-    PyDict_SetItemString(memo_table_entry, "files_written", files_written);
+    if (PyDict_Size(files_written) > 0) {
+      PyDict_SetItemString(memo_table_entry, "files_written", files_written);
+    }
     Py_DECREF(files_written);
   }
 
