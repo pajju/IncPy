@@ -51,6 +51,11 @@ typedef struct {
   // (small value between 0 and 255, to conserve struct space)
   unsigned char num_fast_calls_with_no_memoized_vals;
 
+  // mandatory status message to print using USER_LOG_PRINTF
+  // if is_impure, to provide better error reporting for debugging
+  // (NULL unless initialized, is_impure implies it's non-null)
+  PyObject* impure_status_msg;
+
 } FuncMemoInfo;
 
 #define GET_CANONICAL_NAME(fmi) ((PyCodeObject*)fmi->f_code)->pg_canonical_name

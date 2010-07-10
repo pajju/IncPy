@@ -118,6 +118,7 @@ void clear_cache_and_mark_pure(FuncMemoInfo* func_memo_info) {
   func_memo_info->is_impure = 0;
   func_memo_info->likely_nothing_to_memoize = 0;
   func_memo_info->num_fast_calls_with_no_memoized_vals = 0;
+  Py_CLEAR(func_memo_info->impure_status_msg);
 }
 
 

@@ -251,6 +251,8 @@ unsigned int memoize_time_limit_ms = 1000;
 #endif // Py_DEBUG
 
 
+char dummy_sprintf_buf[3000]; // for doing sprintf ... hope it doesn't overflow :)
+
 /* Dict where each key is a canonical name and each value is a PyInt
    that represents a POINTER to the corresponding FuncMemoInfo struct
    (we can't directly store FuncMemoInfo structs since they're not a
@@ -1041,6 +1043,10 @@ static void mark_impure(PyFrameObject* f, char* why) {
 
   f->func_memo_info->is_impure = 1;
 
+  assert(why);
+  assert(!f->func_memo_info->impure_status_msg); // shouldn't be initialized yet
+  f->func_memo_info->impure_status_msg = PyString_FromString(why);
+
   // Minor optimization (possibly):
   //   Clear the arg_reachable_func_start_time counts for all arguments,
   //   since we no longer need to track them
@@ -1499,7 +1505,8 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
   // the code object (Include/code.h) and doing checking against
   // definitely_impure_funcs at code creation time rather than call time
   if (TrieContains(definitely_impure_funcs, PyString_AsString(f->f_code->co_name))) {
-    mark_entire_stack_impure(PyString_AsString(f->f_code->co_name));
+    sprintf(dummy_sprintf_buf, "called a definitely-impure function %s", PyString_AsString(f->f_code->co_name));
+    mark_entire_stack_impure(dummy_sprintf_buf);
     MEMOIZE_PUBLIC_END() // remember these error paths!
     return NULL;
   }
@@ -2114,8 +2121,9 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
 
   // punt completely on all impure functions
   if (my_func_memo_info->is_impure) {
-    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | impure | runtime %ld ms\n",
-                    PyString_AsString(canonical_name), runtime_ms);
+    assert(my_func_memo_info->impure_status_msg);
+    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | impure because %s | runtime %ld ms\n",
+                    PyString_AsString(canonical_name), PyString_AsString(my_func_memo_info->impure_status_msg), runtime_ms);
     // don't forget to clean up!
     goto pg_exit_frame_done;
   }
@@ -2570,7 +2578,8 @@ void pg_STORE_DEL_GLOBAL_event(PyObject *varname) {
      all executing at the time that a global write occurs */
   PG_LOG_PRINTF("dict(event='SET_GLOBAL_VAR', what='%s')\n",
                 PyString_AsString(varname));
-  mark_entire_stack_impure("mutate global");
+  sprintf(dummy_sprintf_buf, "mutate global var %s", PyString_AsString(varname));
+  mark_entire_stack_impure(dummy_sprintf_buf);
 
   MEMOIZE_PUBLIC_END()
 }
@@ -2709,7 +2718,10 @@ void pg_about_to_MUTATE_event(PyObject *object) {
       return;
     }
 
-    mark_entire_stack_impure("mutate global");
+    PyObject* tmp_str = PyObject_Repr(global_container);
+    sprintf(dummy_sprintf_buf, "mutate global var %s", PyString_AsString(tmp_str));
+    mark_entire_stack_impure(dummy_sprintf_buf);
+    Py_DECREF(tmp_str);
   }
   else {
     // then check for reachability from function arguments:
@@ -2724,7 +2736,9 @@ void pg_about_to_MUTATE_event(PyObject *object) {
           // calls bar(x) calls baz(x))
           // (see IncPy-regression-tests/impure_arg_3 test)
           if (arg_reachable_func_start_time <= f->start_func_call_time) {
-            mark_impure(f, "mutate non-local value");
+            sprintf(dummy_sprintf_buf, "%s mutates its argument",
+                    PyString_AsString(GET_CANONICAL_NAME(f->func_memo_info)));
+            mark_impure(f, dummy_sprintf_buf);
           }
         }
         f = f->f_back;
@@ -2803,8 +2817,8 @@ void pg_about_to_CALL_C_METHOD_WITH_SELF_event(char* func_name, PyObject* self) 
   // first check whether we've called a built-in C function that's in
   // definitely_impure_funcs:
   if (TrieContains(definitely_impure_funcs, func_name)) {
-    //USER_LOG_PRINTF("IMPURE C FUNCTION CALL | %s\n", func_name);
-    mark_entire_stack_impure(func_name);
+    sprintf(dummy_sprintf_buf, "called a definitely-impure function %s", func_name);
+    mark_entire_stack_impure(dummy_sprintf_buf);
     return;
   }
 
