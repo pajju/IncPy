@@ -889,6 +889,10 @@ void pg_init_new_code_object(PyCodeObject* co) {
   //   3. ignore code with untrackable filenames
   //   4. ignore code from files whose paths start with some element of
   //      ignore_paths_lst
+  //   5. ignore code from weird-looking 'fake' files, such as any filename
+  //      starting with '<' and that's NOT a file that actually exists
+  //      on disk (e.g., the Jinja template engine uses '<template>'
+  //      as a fake filename)
   co->pg_ignore =
     ((!co->pg_canonical_name) ||
 
@@ -902,6 +906,12 @@ void pg_init_new_code_object(PyCodeObject* co) {
 
      (prefix_in_ignore_paths_lst(co->co_filename)));
 
+  if (PyString_AsString(co->co_filename)[0] == '<') {
+    struct stat st;
+    if (stat(PyString_AsString(co->co_filename), &st) != 0) {
+      co->pg_ignore = 1;
+    }
+  }
 
   // pg_CREATE_FUNCTION_event should catch most code dependencies, but
   // in order to catch nested functions (which aren't initialized by
