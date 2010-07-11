@@ -1447,6 +1447,15 @@ static int are_code_dependencies_satisfied(PyObject* code_dependency_dict,
     // if the function is NOT FOUND or its code has changed, then
     // that code dependency is definitely broken
     if (!cur_code_dependency) {
+
+      /* this is why we need to invalidate the cache entry if dependent
+         code is NOT found: if foo calls bar, and then you delete the
+         code for bar, the correct behavior is to invalidate the cache
+         for foo, re-run foo, and then get a run-time error (since bar
+         is now non-existent).  if you simply re-used the old cached
+         result for foo, then that doesn't trigger a run-time error, so
+         it doesn't match the behavior when running with regular Python */
+
       PG_LOG_PRINTF("dict(event='CODE_DEPENDENCY_BROKEN', why='CODE_NOT_FOUND', what='%s')\n",
                     dependent_func_name_str);
       USER_LOG_PRINTF("CODE_DEPENDENCY_BROKEN %s | %s not found\n",
