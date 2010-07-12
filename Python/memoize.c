@@ -2775,22 +2775,29 @@ static void init_self_mutator_c_methods(void) {
   self_mutator_c_methods = TrieCalloc();
 
   // we want to ignore methods from these common C extension types:
-  TrieInsert(self_mutator_c_methods, "append"); // list, bytearray
+  TrieInsert(self_mutator_c_methods, "append"); // list, bytearray, dequeue
   TrieInsert(self_mutator_c_methods, "insert"); // list, bytearray
-  TrieInsert(self_mutator_c_methods, "extend"); // list, bytearray
-  TrieInsert(self_mutator_c_methods, "pop"); // list, dict, set, bytearray
-  TrieInsert(self_mutator_c_methods, "remove"); // list, set, bytearray
+  TrieInsert(self_mutator_c_methods, "extend"); // list, bytearray, dequeue
+  TrieInsert(self_mutator_c_methods, "pop"); // list, dict, set, bytearray, dequeue
+  TrieInsert(self_mutator_c_methods, "remove"); // list, set, bytearray, dequeue
   TrieInsert(self_mutator_c_methods, "reverse"); // list, bytearray
   TrieInsert(self_mutator_c_methods, "sort"); // list
   TrieInsert(self_mutator_c_methods, "popitem"); // dict
   TrieInsert(self_mutator_c_methods, "update"); // dict, set
-  TrieInsert(self_mutator_c_methods, "clear"); // dict, set
+  TrieInsert(self_mutator_c_methods, "clear"); // dict, set, dequeue
   TrieInsert(self_mutator_c_methods, "intersection_update"); // set
   TrieInsert(self_mutator_c_methods, "difference_update"); // set
   TrieInsert(self_mutator_c_methods, "symmetric_difference_update"); // set
   TrieInsert(self_mutator_c_methods, "add"); // set
   TrieInsert(self_mutator_c_methods, "discard"); // set
   TrieInsert(self_mutator_c_methods, "resize"); // numpy.array
+
+  TrieInsert(self_mutator_c_methods, "appendleft"); // deque
+  TrieInsert(self_mutator_c_methods, "extendleft"); // deque
+  TrieInsert(self_mutator_c_methods, "popleft");    // deque
+  TrieInsert(self_mutator_c_methods, "rotate");     // deque
+
+  TrieInsert(self_mutator_c_methods, "setdefault"); // dict
 }
 
 /* some of these are built-in C functions, while others are Python
