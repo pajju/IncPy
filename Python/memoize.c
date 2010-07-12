@@ -946,7 +946,7 @@ void pg_CREATE_FUNCTION_event(PyFunctionObject* func) {
   // code dependency
   if (func->func_doc &&
       PyString_CheckExact(func->func_doc) &&
-      (strcmp(PyString_AsString(func->func_doc), "incpy.ignore") == 0)) {
+      (strstr(PyString_AsString(func->func_doc), "incpy.ignore") != NULL)) {
     PG_LOG_PRINTF("dict(event='IGNORING_FUNCTION', what='%s')\n",
                   PyString_AsString(cod->pg_canonical_name));
     USER_LOG_PRINTF("IGNORING_FUNCTION | %s\n",
@@ -955,6 +955,33 @@ void pg_CREATE_FUNCTION_event(PyFunctionObject* func) {
   }
   else {
     add_new_code_dep(cod);
+
+    if (!cod->pg_ignore) {
+
+      // check for other annotations on the function's docstring and set the
+      // proper fields of 'co' accordingly
+      if (func->func_doc && PyString_CheckExact(func->func_doc)) {
+        // force memoization
+        if (strstr(PyString_AsString(func->func_doc), "incpy.memoize") != NULL) {
+          PG_LOG_PRINTF("dict(event='FORCE_MEMOIZATION', what='%s')\n",
+                        PyString_AsString(cod->pg_canonical_name));
+          USER_LOG_PRINTF("FORCE_MEMOIZATION | %s\n",
+                          PyString_AsString(cod->pg_canonical_name));
+
+          cod->pg_force_memoization = 1;
+        }
+
+        // ignore stdout/stderr output
+        if (strstr(PyString_AsString(func->func_doc), "incpy.no_output") != NULL) {
+          PG_LOG_PRINTF("dict(event='IGNORE_STDOUT_STDERR', what='%s')\n",
+                        PyString_AsString(cod->pg_canonical_name));
+          USER_LOG_PRINTF("IGNORE_STDOUT_STDERR | %s\n",
+                          PyString_AsString(cod->pg_canonical_name));
+
+          cod->pg_no_stdout_stderr = 1;
+        }
+      }
+    }
   }
 
   MEMOIZE_PUBLIC_END()
@@ -1604,8 +1631,10 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
   // punt on all impure or ignored functions ... we can't memoize their return values
   // (but we still need to track their dependencies)
-  if (f->func_memo_info->is_impure || f->func_memo_info->likely_nothing_to_memoize) {
-    goto pg_enter_frame_done;
+  if (!co->pg_force_memoization) { // (only check this if we're not forcing memoization)
+    if (f->func_memo_info->is_impure || f->func_memo_info->likely_nothing_to_memoize) {
+      goto pg_enter_frame_done;
+    }
   }
 
 
@@ -1948,7 +1977,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
       // start with your immediate parent:
       PyFrameObject* cur_frame = f->f_back;
       while (cur_frame) {
-        if (cur_frame->func_memo_info) {
+        if (cur_frame->func_memo_info && !cur_frame->f_code->pg_no_stdout_stderr) {
           LAZY_INIT_STRINGIO_FIELD(cur_frame->stdout_cStringIO);
           PyFile_WriteString(PyString_AsString(memoized_stdout_buf),
                              cur_frame->stdout_cStringIO);
@@ -1964,7 +1993,7 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
       // start with your immediate parent:
       PyFrameObject* cur_frame = f->f_back;
       while (cur_frame) {
-        if (cur_frame->func_memo_info) {
+        if (cur_frame->func_memo_info && !cur_frame->f_code->pg_no_stdout_stderr) {
           LAZY_INIT_STRINGIO_FIELD(cur_frame->stderr_cStringIO);
           PyFile_WriteString(PyString_AsString(memoized_stderr_buf),
                              cur_frame->stderr_cStringIO);
@@ -2101,7 +2130,9 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   // anything with regards to memoization if this is the case ...
   if (!retval) goto pg_exit_frame_done;
 
-  if (f->f_code->pg_ignore) {
+  PyCodeObject* co = f->f_code;
+
+  if (co->pg_ignore) {
     goto pg_exit_frame_done;
   }
 
@@ -2131,72 +2162,76 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   }
 
 
-  // don't bother memoizing results of short-running functions
-  if (runtime_ms <= memoize_time_limit_ms) {
-    // don't forget to clean up!
-    goto pg_exit_frame_done;
-  }
+  // (only check these conditions if we're not forcing memoization)
+  if (!co->pg_force_memoization) {
+
+    // don't bother memoizing results of short-running functions
+    if (runtime_ms <= memoize_time_limit_ms) {
+      // don't forget to clean up!
+      goto pg_exit_frame_done;
+    }
+
+    // punt completely on all impure functions
+    if (my_func_memo_info->is_impure) {
+      assert(my_func_memo_info->impure_status_msg);
+      USER_LOG_PRINTF("CANNOT_MEMOIZE %s | impure because %s | runtime %ld ms\n",
+                      PyString_AsString(canonical_name), PyString_AsString(my_func_memo_info->impure_status_msg), runtime_ms);
+      // don't forget to clean up!
+      goto pg_exit_frame_done;
+    }
+
+    // also punt on functions that we've given up on, since they ran too
+    // many times without anything to memoize:
+    if (my_func_memo_info->likely_nothing_to_memoize) {
+      USER_LOG_PRINTF("CANNOT_MEMOIZE %s | erroneously marked as 'likely nothing to memoize' | runtime %ld ms\n",
+                      PyString_AsString(canonical_name), runtime_ms);
+      // don't forget to clean up!
+      goto pg_exit_frame_done;
+    }
 
 
-  // punt completely on all impure functions
-  if (my_func_memo_info->is_impure) {
-    assert(my_func_memo_info->impure_status_msg);
-    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | impure because %s | runtime %ld ms\n",
-                    PyString_AsString(canonical_name), PyString_AsString(my_func_memo_info->impure_status_msg), runtime_ms);
-    // don't forget to clean up!
-    goto pg_exit_frame_done;
-  }
+    /* Don't memoize a function invocation with non-self-contained writes.
 
-  // also punt on functions that we've given up on, since they ran too
-  // many times without anything to memoize:
-  if (my_func_memo_info->likely_nothing_to_memoize) {
-    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | erroneously marked as 'likely nothing to memoize' | runtime %ld ms\n",
-                    PyString_AsString(canonical_name), runtime_ms);
-    // don't forget to clean up!
-    goto pg_exit_frame_done;
-  }
+       A write is self-contained if this function was on the stack when
+       the file was opened in pure-write mode, written to, and then closed */
+    if (f->files_written_set && PySet_Size(f->files_written_set)) {
+      // ok, so this function wrote to some files ...
+      // were these writes self-contained?
+      Py_ssize_t s_pos = 0;
+      PyObject* written_filename;
+      while (_PySet_Next(f->files_written_set, &s_pos, &written_filename)) {
+        // sometimes there are weird 'fake' files with names like
+        // <fdopen> and <tmpfile>, so just ignore those
+        char* filename_str = PyString_AsString(written_filename);
+        int filename_len = strlen(filename_str);
+        if (filename_str[0] == '<' && filename_str[filename_len - 1] == '>') {
+          continue;
+        }
 
-
-  /* Don't memoize a function invocation with non-self-contained writes.
-   
-     A write is self-contained if this function was on the stack when
-     the file was opened in pure-write mode, written to, and then closed */
-  if (f->files_written_set && PySet_Size(f->files_written_set)) {
-    // ok, so this function wrote to some files ... 
-    // were these writes self-contained?
-    Py_ssize_t s_pos = 0;
-    PyObject* written_filename;
-    while (_PySet_Next(f->files_written_set, &s_pos, &written_filename)) {
-      // sometimes there are weird 'fake' files with names like
-      // <fdopen> and <tmpfile>, so just ignore those
-      char* filename_str = PyString_AsString(written_filename);
-      int filename_len = strlen(filename_str);
-      if (filename_str[0] == '<' && filename_str[filename_len - 1] == '>') {
-        continue;
+        if (!(f->files_opened_w_set &&
+              PySet_Contains(f->files_opened_w_set, written_filename) &&
+              f->files_closed_set &&
+              PySet_Contains(f->files_closed_set, written_filename))) {
+          PG_LOG("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Non self-contained write')");
+          USER_LOG_PRINTF("CANNOT_MEMOIZE %s | non-self-contained file write | runtime %ld ms\n",
+                          PyString_AsString(canonical_name), runtime_ms);
+          goto pg_exit_frame_done;
+        }
       }
+    }
 
-      if (!(f->files_opened_w_set && 
-            PySet_Contains(f->files_opened_w_set, written_filename) &&
-            f->files_closed_set &&
-            PySet_Contains(f->files_closed_set, written_filename))) {
-        PG_LOG("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Non self-contained write')");
-        USER_LOG_PRINTF("CANNOT_MEMOIZE %s | non-self-contained file write | runtime %ld ms\n",
-                        PyString_AsString(canonical_name), runtime_ms);
-        goto pg_exit_frame_done;
-      }
+
+    /* We should NOT memoize return values when they contain within them
+       mutable values that are externally-accessible, since if we break
+       the aliasing relation, we risk a mismatch with expected behavior. */
+    if (contains_externally_aliased_mutable_obj(retval, f)) {
+      PG_LOG("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Return value contains externally-aliased mutable object')");
+      USER_LOG_PRINTF("CANNOT_MEMOIZE %s | returning externally-aliased mutable object | runtime %ld ms\n",
+                      PyString_AsString(canonical_name), runtime_ms);
+      goto pg_exit_frame_done;
     }
   }
 
-
-  /* We should NOT memoize return values when they contain within them
-     mutable values that are externally-accessible, since if we break 
-     the aliasing relation, we risk a mismatch with expected behavior. */
-  if (contains_externally_aliased_mutable_obj(retval, f)) {
-    PG_LOG("dict(event='WARNING', what='CANNOT_MEMOIZE', why='Return value contains externally-aliased mutable object')");
-    USER_LOG_PRINTF("CANNOT_MEMOIZE %s | returning externally-aliased mutable object | runtime %ld ms\n",
-                    PyString_AsString(canonical_name), runtime_ms);
-    goto pg_exit_frame_done;
-  }
 
   // don't memoize functions returning funky types that can't be safely
   // pickled (e.g., file handles act weird when pickled)
@@ -3016,7 +3051,7 @@ void pg_intercept_PyFile_WriteString(const char *s, PyObject *f) {
 
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
 
         // now call the REAL PyFile_WriteString with f->stdout_cStringIO
@@ -3031,7 +3066,7 @@ void pg_intercept_PyFile_WriteString(const char *s, PyObject *f) {
     // handle stderr in EXACTLY the same way as we handle stdout
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
         PyFile_WriteString(s, f->stderr_cStringIO);
       }
@@ -3057,7 +3092,7 @@ void pg_intercept_PyFile_WriteObject(PyObject *v, PyObject *f, int flags) {
     // no way we can memoize it, so don't bother tracking it
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
 
         // now call the REAL PyFile_WriteObject with f->stdout_cStringIO
@@ -3072,7 +3107,7 @@ void pg_intercept_PyFile_WriteObject(PyObject *v, PyObject *f, int flags) {
     // handle stderr in EXACTLY the same way as we handle stdout
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
         PyFile_WriteObject(v, f->stderr_cStringIO, flags);
       }
@@ -3098,7 +3133,7 @@ void pg_intercept_PyFile_SoftSpace(PyObject *f, int newflag) {
     // no way we can memoize it, so don't bother tracking it
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
 
         // now call the REAL PyFile_SoftSpace with f->stdout_cStringIO
@@ -3113,7 +3148,7 @@ void pg_intercept_PyFile_SoftSpace(PyObject *f, int newflag) {
     // handle stderr in EXACTLY the same way as we handle stdout
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
         PyFile_SoftSpace(f->stderr_cStringIO, newflag);
       }
@@ -3139,7 +3174,7 @@ void pg_intercept_file_write(PyFileObject *f, PyObject *args) {
     // no way we can memoize it, so don't bother tracking it
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
 
         // now call the REAL file_write with f->stdout_cStringIO
@@ -3162,7 +3197,7 @@ void pg_intercept_file_write(PyFileObject *f, PyObject *args) {
     // handle stderr in EXACTLY the same way as we handle stdout
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
         assert(PyTuple_Size(args) == 1);
         PyObject* out_string = PyTuple_GetItem(args, 0);
@@ -3192,7 +3227,7 @@ void pg_intercept_file_writelines(PyFileObject *f, PyObject *seq) {
     // no way we can memoize it, so don't bother tracking it
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stdout_cStringIO);
 
         // now call the REAL file_writelines with f->stdout_cStringIO
@@ -3209,7 +3244,7 @@ void pg_intercept_file_writelines(PyFileObject *f, PyObject *seq) {
     // handle stderr in EXACTLY the same way as we handle stdout
     PyFrameObject* f = PyEval_GetFrame();
     while (f) {
-      if (f->func_memo_info) {
+      if (f->func_memo_info && !f->f_code->pg_no_stdout_stderr) {
         LAZY_INIT_STRINGIO_FIELD(f->stderr_cStringIO);
         PyObject* method_name = PyString_FromString("writelines");
         PyObject_CallMethodObjArgs(f->stderr_cStringIO, method_name, seq, NULL);

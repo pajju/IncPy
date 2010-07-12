@@ -32,6 +32,9 @@ typedef struct {
     FuncMemoInfo* pg_func_memo_info; /* pgbovine - FuncMemoInfo associated with this code */
     char pg_ignore; /* pgbovine - non-zero if this code should be ignored - see Python/memoize.c */
     char pg_is_module; /* pgbovine - non-zero if this code's name is '<module>' */
+    char pg_force_memoization; /* pgbovine - non-zero if we want to memoize its calls no matter what */
+    char pg_no_stdout_stderr; /* pgbovine - non-zero if we don't want to record stdout/stderr buffers*/
+
     int co_firstlineno;		/* first source line number */
     PyObject *co_lnotab;	/* string (encoding addr<->lineno mapping) */
     void *co_zombieframe;     /* for optimization only (see frameobject.c) */
