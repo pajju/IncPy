@@ -69,6 +69,7 @@ void DELETE_func_memo_info(FuncMemoInfo* fmi) {
   Py_CLEAR(fmi->code_dependencies);
   Py_CLEAR(fmi->f_code);
   Py_CLEAR(fmi->cache_subdirectory_path);
+  Py_CLEAR(fmi->impure_status_msg);
   PyMem_Del(fmi);
 }
 
