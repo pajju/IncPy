@@ -104,7 +104,14 @@ int pysqlite_connection_init(pysqlite_Connection* self, PyObject* args, PyObject
         /* pgbovine */
         self->db_file_handle =
           (PyFileObject*)PyFile_FromString(PyString_AsString(database_utf8), "r");
-        assert(self->db_file_handle);
+
+        // sometimes database_utf8 isn't a real filename, so ignore
+        // errors if the file doesn't exist on disk
+        // (most notably, it can be ":memory:" for an in-memory db)
+        if (!self->db_file_handle) {
+          assert(PyErr_Occurred());
+          PyErr_Clear();
+        }
 
         Py_DECREF(database_utf8);
 
