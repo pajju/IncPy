@@ -879,6 +879,8 @@ void pg_init_new_code_object(PyCodeObject* co) {
 
   co->pg_canonical_name = create_canonical_code_name(co);
 
+  char* c_funcname = PyString_AsString(co->co_name);
+  char* c_filename = PyString_AsString(co->co_filename);
 
   // ignore the following code:
   //
@@ -896,22 +898,34 @@ void pg_init_new_code_object(PyCodeObject* co) {
   co->pg_ignore =
     ((!co->pg_canonical_name) ||
 
-     (strcmp(PyString_AsString(co->co_name), "<genexpr>") == 0) ||
+     (strcmp(c_funcname, "<genexpr>") == 0) ||
 
-     (strcmp(PyString_AsString(co->co_name), "<lambda>") == 0) ||
+     (strcmp(c_funcname, "<lambda>") == 0) ||
 
-     ((strcmp(PyString_AsString(co->co_filename), "<string>") == 0) ||
-      (strcmp(PyString_AsString(co->co_filename), "<stdin>") == 0) ||
-      (strcmp(PyString_AsString(co->co_filename), "???") == 0)) ||
+     ((strcmp(c_filename, "<string>") == 0) ||
+      (strcmp(c_filename, "<stdin>") == 0) ||
+      (strcmp(c_filename, "???") == 0)) ||
 
      (prefix_in_ignore_paths_lst(co->co_filename)));
 
-  if (PyString_AsString(co->co_filename)[0] == '<') {
+  if (c_filename[0] == '<') {
     struct stat st;
-    if (stat(PyString_AsString(co->co_filename), &st) != 0) {
+    if (stat(c_filename, &st) != 0) {
       co->pg_ignore = 1;
     }
   }
+
+  // DON'T IGNORE certain special functions, even if they are contained
+  // in library code from ignore_paths_lst
+  //
+  // we will later special-case these functions for the purposes of
+  // file dependency tracking
+  //
+  // matplotlib.pyplot.savefig()
+  if ((strcmp(c_funcname, "savefig") == 0) && (strstr(c_filename, "pyplot.py") != NULL)) {
+    co->pg_ignore = 0;
+  }
+
 
   // pg_CREATE_FUNCTION_event should catch most code dependencies, but
   // in order to catch nested functions (which aren't initialized by
@@ -1544,14 +1558,16 @@ static void populate_stored_args_lst(PyFrameObject* f) {
 PyObject* pg_enter_frame(PyFrameObject* f) {
   MEMOIZE_PUBLIC_START_RETNULL()
 
+  char* c_funcname = PyString_AsString(f->f_code->co_name);
+
   // mark entire stack impure when calling Python functions with names
   // matching definitely_impure_funcs
   //
   // TODO: could speed up if necessary by adding an extra field in
   // the code object (Include/code.h) and doing checking against
   // definitely_impure_funcs at code creation time rather than call time
-  if (TrieContains(definitely_impure_funcs, PyString_AsString(f->f_code->co_name))) {
-    sprintf(dummy_sprintf_buf, "called a definitely-impure function %s", PyString_AsString(f->f_code->co_name));
+  if (TrieContains(definitely_impure_funcs, c_funcname)) {
+    sprintf(dummy_sprintf_buf, "called a definitely-impure function %s", c_funcname);
     mark_entire_stack_impure(dummy_sprintf_buf);
     MEMOIZE_PUBLIC_END() // remember these error paths!
     return NULL;
@@ -1648,6 +1664,40 @@ PyObject* pg_enter_frame(PyFrameObject* f) {
 
      TODO: I haven't tested support for varargs yet */
   populate_stored_args_lst(f);
+
+
+  // add some file dependencies for special functions where IncPy can't
+  // automatically detect them:
+
+  // matplotlib.pyplot.savefig()
+  if ((strcmp(c_funcname, "savefig") == 0) &&
+      (strstr(PyString_AsString(f->f_code->co_filename), "pyplot.py") != NULL)) {
+    assert(f->f_code->co_argcount > 0);
+    PyObject* first_arg = f->f_localsplus[0];
+
+    // the first argument to this function is a tuple (i guess because
+    // it uses varargs or whatever), so split it up
+    assert(PyTuple_CheckExact(first_arg));
+    PyObject* item = PyTuple_GET_ITEM(first_arg, 0);
+
+    // the first argument to this function can either be a string or
+    // file object; if it's a file object, then the write dependency
+    // is detected automatically, but if it's a string, then we have
+    // to manually add it
+    if (PyString_Check(item)) {
+      PyFrameObject* f = PyEval_GetFrame();
+      while (f) {
+        if (f->func_memo_info) {
+          // must add to all 3 sets to simulate a 'self-contained' write!
+          LAZY_INIT_SET_ADD(f->files_opened_w_set, item);
+          LAZY_INIT_SET_ADD(f->files_written_set, item);
+          LAZY_INIT_SET_ADD(f->files_closed_set, item);
+        }
+        f = f->f_back;
+      }
+    }
+  }
+
 
   PyObject* memoized_global_vars_read = NULL;
   PyObject* memoized_code_dependencies = NULL;
