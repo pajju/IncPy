@@ -646,6 +646,16 @@ static PyObject* create_proxy_object(PyObject* obj) {
     }
   }
   else {
+    // poor-man's test for isinstance(obj, 'classname')
+    struct _typeobject* t = Py_TYPE(obj);
+    while (t) {
+      if (strcmp(t->tp_name, "TestCase") == 0) {
+        PYPRINT(Py_TYPE(obj));
+        return PyString_FromString(Py_TYPE(obj)->tp_name);
+      }
+      t = t->tp_base;
+    }
+
     const char* obj_typename = Py_TYPE(obj)->tp_name;
 
     // for sqlite3 cursor, create a tuple: ('Sqlite3CursorProxy', <db filename>)
@@ -659,6 +669,10 @@ static PyObject* create_proxy_object(PyObject* obj) {
         Py_DECREF(proxy_tag);
         return ret;
       }
+    }
+    else if (strcmp(obj_typename, "_TextTestResult") == 0) {
+      PyObject* proxy_tag = PyString_FromString("_TextTestResult");
+      return proxy_tag;
     }
   }
 
@@ -923,6 +937,11 @@ void pg_init_new_code_object(PyCodeObject* co) {
   //
   // matplotlib.pyplot.savefig()
   if ((strcmp(c_funcname, "savefig") == 0) && (strstr(c_filename, "pyplot.py") != NULL)) {
+    co->pg_ignore = 0;
+  }
+
+
+  if (strstr(c_filename, "unittest.py") != NULL) {
     co->pg_ignore = 0;
   }
 
@@ -2409,9 +2428,11 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       }
     }
 
+    /*
     if (PyDict_Size(global_vars_read) > 0) {
       PyDict_SetItemString(memo_table_entry, "global_vars_read", global_vars_read);
     }
+    */
     Py_DECREF(global_vars_read);
   }
 
