@@ -650,7 +650,6 @@ static PyObject* create_proxy_object(PyObject* obj) {
     struct _typeobject* t = Py_TYPE(obj);
     while (t) {
       if (strcmp(t->tp_name, "TestCase") == 0) {
-        PYPRINT(Py_TYPE(obj));
         return PyString_FromString(Py_TYPE(obj)->tp_name);
       }
       t = t->tp_base;
