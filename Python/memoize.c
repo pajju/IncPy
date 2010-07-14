@@ -650,7 +650,8 @@ static PyObject* create_proxy_object(PyObject* obj) {
     struct _typeobject* t = Py_TYPE(obj);
     while (t) {
       if (strcmp(t->tp_name, "TestCase") == 0) {
-        return PyString_FromString(Py_TYPE(obj)->tp_name);
+        // return a string representation of its fully-qualified class name:
+        return PyObject_Repr(Py_TYPE(obj));
       }
       t = t->tp_base;
     }
@@ -2407,6 +2408,9 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
     Py_DECREF(stderr_val);
   }
 
+  // for Django unit tests, IGNORE all globals, since they are
+  // irrelevant and largely unpicklable:
+#ifdef UNDEFINED_FOO
   if (f->globals_read_set) {
     PyObject* global_vars_read = PyDict_New();
 
@@ -2427,13 +2431,12 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
       }
     }
 
-    /*
     if (PyDict_Size(global_vars_read) > 0) {
       PyDict_SetItemString(memo_table_entry, "global_vars_read", global_vars_read);
     }
-    */
     Py_DECREF(global_vars_read);
   }
+#endif // UNDEFINED_FOO
 
   if (f->files_read_set) {
     PyObject* files_read = PyDict_New();
