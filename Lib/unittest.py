@@ -262,7 +262,7 @@ class TestCase:
                (_strclass(self.__class__), self._testMethodName)
 
     def run(self, result=None):
-        '''Force TestCase::run to be memoized: incpy.memoize'''
+        '''Force TestCase::run to be memoized: incpy.memoize, incpy.no_output'''
         if result is None: result = self.defaultTestResult()
         result.startTest(self)
         testMethod = getattr(self, self._testMethodName)

@@ -650,8 +650,21 @@ static PyObject* create_proxy_object(PyObject* obj) {
     struct _typeobject* t = Py_TYPE(obj);
     while (t) {
       if (strcmp(t->tp_name, "TestCase") == 0) {
-        // return a string representation of its fully-qualified class name:
-        return PyObject_Repr(Py_TYPE(obj));
+        // return a pair representing its class name and _testMethodName (if found)
+        PyObject* classname = PyObject_Repr(Py_TYPE(obj));
+        PyObject* testname = PyObject_GetAttrString(obj, "_testMethodName");
+        if (!testname) {
+          assert(PyErr_Occurred());
+          PyErr_Clear();
+
+          testname = Py_None;
+          Py_INCREF(testname);
+        }
+        PyObject* ret = PyTuple_Pack(2, classname, testname);
+
+        Py_DECREF(classname);
+        Py_DECREF(testname);
+        return ret;
       }
       t = t->tp_base;
     }
