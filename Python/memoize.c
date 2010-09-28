@@ -2486,20 +2486,48 @@ void pg_exit_frame(PyFrameObject* f, PyObject* retval) {
   Py_DECREF(memo_table_entry);
 
 
+  // starting and ending time as timeval structs
+  struct timeval memoize_start_time;
+  struct timeval memoize_end_time;
+
+  BEGIN_TIMING(memoize_start_time);
+
   // save the ENTIRE memoized_vals_matching_args to disk:
   PyObject* cPickle_dump_res =
     on_disk_cache_PUT(my_func_memo_info,
                       f->stored_args_lst_hash, memoized_vals_matching_args);
 
+  END_TIMING(memoize_start_time, memoize_end_time);
+  long memoize_time_ms = GET_ELAPSED_MS(memoize_start_time, memoize_end_time);
+
   if (cPickle_dump_res) {
     Py_DECREF(cPickle_dump_res);
 
-    PG_LOG_PRINTF("dict(event='MEMOIZED_RESULTS', what='%s', runtime_ms='%ld')\n",
-                  PyString_AsString(canonical_name),
-                  runtime_ms);
-    USER_LOG_PRINTF("MEMOIZED %s | runtime %ld ms\n",
+    // if it takes longer to memoize this call than to re-run it, then
+    // don't bother memoizing it at all!!!  delete the entry and print
+    // out a warning.  (the time it takes to load the cache entry from
+    // disk and de-serialize is roughly identical to the time it takes
+    // to serialize and save to disk.)
+    if (memoize_time_ms > runtime_ms) {
+      on_disk_cache_DEL(my_func_memo_info, f->stored_args_lst_hash);
+
+      PG_LOG_PRINTF("dict(event='DO_NOT_MEMOIZE', what='%s', why='memoize_time_ms > runtime_ms', memoize_time_ms='%ld', runtime_ms='%ld')\n",
+                    PyString_AsString(canonical_name),
+                    memoize_time_ms,
+                    runtime_ms);
+      USER_LOG_PRINTF("DO_NOT_MEMOIZE %s | memoize time (%ld ms) > running time (%ld ms)\n",
+                      PyString_AsString(canonical_name),
+                      memoize_time_ms,
+                      runtime_ms);
+    }
+    else {
+      PG_LOG_PRINTF("dict(event='MEMOIZED_RESULTS', what='%s', runtime_ms='%ld')\n",
                     PyString_AsString(canonical_name),
                     runtime_ms);
+      USER_LOG_PRINTF("MEMOIZED %s | runtime %ld ms\n",
+                      PyString_AsString(canonical_name),
+                      runtime_ms);
+    }
   }
   else {
     assert(PyErr_Occurred());
