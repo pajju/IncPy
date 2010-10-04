@@ -26203,7 +26203,7 @@ mv config.c Modules
 if test ! -f $HOME/incpy.config
 then
   echo "creating $HOME/incpy.config"
-  stdlib_dir=`pwd`/Lib/
+  stdlib_dir=`pwd -P`/Lib/
   touch $HOME/incpy.config
   echo "# ignoring Python standard library" > $HOME/incpy.config
   echo "ignore = $stdlib_dir" >> $HOME/incpy.config
