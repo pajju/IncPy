@@ -3880,3 +3880,16 @@ BeOS)
 esac
 
 mv config.c Modules
+
+
+# pgbovine - create a blank incpy.config file pre-seeded
+#            with ignoring standard library
+if test ! -f $HOME/incpy.config
+then
+  echo "creating $HOME/incpy.config"
+  stdlib_dir=`pwd`/Lib/
+  touch $HOME/incpy.config
+  echo "# ignoring Python standard library" > $HOME/incpy.config
+  echo "ignore = $stdlib_dir" >> $HOME/incpy.config
+fi
+
