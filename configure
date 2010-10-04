@@ -13,6 +13,10 @@
 ## M4sh Initialization.  ##
 ## --------------------- ##
 
+# Modified by Philip Guo for IncPy (search for pgbovine comments)
+# (note that if you reconfigure from configure.in,
+# you will NOT see my IncPy changes)
+
 # Be more Bourne compatible
 DUALCASE=1; export DUALCASE # for MKS sh
 if test -n "${ZSH_VERSION+set}" && (emulate sh) >/dev/null 2>&1; then
@@ -4771,6 +4775,16 @@ if test "$Py_DEBUG" = 'true'; then
 else
   OPT="-DNDEBUG $OPT"
 fi
+
+# pgbovine - see if sqlite3 headers exist on this machine
+# and define a NOSQLITE cpp value if they do NOT exist
+rm -f test_exists_sqlite3
+$CC test_exists_sqlite3.c -o test_exists_sqlite3
+if test ! -f test_exists_sqlite3; then
+  OPT="-DNOSQLITE $OPT"
+fi
+rm -f test_exists_sqlite3
+
 
 if test "$ac_arch_flags"
 then

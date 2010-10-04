@@ -603,9 +603,11 @@ static void free_all_shadow_memory(void) {
 /* proxy objects - for objects that can't be pickled, we can instead
    create picklable proxies in their place */
 
-// ugh, ugly #include dependency, but I don't see any way of avoiding it :(
+#ifndef NOSQLITE
+// only attempt to include these if sqlite is installed
 #include "Modules/_sqlite/cursor.h"
 #include "Modules/_sqlite/connection.h"
+#endif // NOSQLITE
 
 // returns NULL if we don't need to create a proxy for the object
 static PyObject* create_proxy_object(PyObject* obj) {
@@ -646,6 +648,7 @@ static PyObject* create_proxy_object(PyObject* obj) {
     }
   }
   else {
+#ifndef NOSQLITE
     const char* obj_typename = Py_TYPE(obj)->tp_name;
 
     // for sqlite3 cursor, create a tuple: ('Sqlite3CursorProxy', <db filename>)
@@ -660,6 +663,7 @@ static PyObject* create_proxy_object(PyObject* obj) {
         return ret;
       }
     }
+#endif // NOSQLITE
   }
 
   return NULL;
